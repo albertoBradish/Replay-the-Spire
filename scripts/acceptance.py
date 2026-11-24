@@ -12,6 +12,7 @@ parser.add_argument("game", type=Path)
 parser.add_argument("--name", required=True, help="New isolated session name")
 parser.add_argument("--candidate", type=Path, help="Use the exact DLL from this packaged plugin directory")
 parser.add_argument("--ffmpeg", type=Path, help="Enable media tests with this FFmpeg executable")
+parser.add_argument("--foreign-replay", type=Path, help="Verify read-only browsing of a file recorded on a different game build")
 parser.add_argument("--campaign", action="store_true", help="Also play and verify a complete native campaign")
 parser.add_argument("--campaign-media", action="store_true", help="Also export and inspect the full campaign album and movie")
 parser.add_argument("--validator", type=Path, help="Optional full-log validator accepting LOG --require MARKER --output JSON")
@@ -83,6 +84,10 @@ if len(encoded) != 1:
 native("control", profile="receiver")
 native("control", profile="receiver")
 native("transfer", profile="receiver", extra=("--import-file", str(encoded[0])))
+if args.foreign_replay:
+    native("control", profile="foreign")
+    native("control", profile="foreign")
+    native("foreign-transfer", profile="foreign", extra=("--import-file", str(args.foreign_replay.resolve())))
 # Continue the original native save before creating any unrelated fixture.
 record_and_watch("resume")
 native("damage-record")
