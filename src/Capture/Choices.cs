@@ -14,11 +14,13 @@ using MegaCrit.Sts2.Core.GameActions;
 using MegaCrit.Sts2.Core.GameActions.Multiplayer;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Multiplayer.Game;
+using MegaCrit.Sts2.Core.Nodes.Screens;
 using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
 using MegaCrit.Sts2.Core.Nodes.Screens.Map;
 using MegaCrit.Sts2.Core.Nodes.Screens.Overlays;
 using MegaCrit.Sts2.Core.Rewards;
 using MegaCrit.Sts2.Core.Runs;
+using SpireReplay.Playback;
 
 namespace SpireReplay.Capture;
 
@@ -48,6 +50,7 @@ internal static partial class CaptureHooks
         hook(typeof(MerchantEntry), nameof(MerchantEntry.InvokePurchaseCompleted), nameof(ShopSuccess), true);
         hook(typeof(RewardsSetSynchronizer), nameof(RewardsSetSynchronizer.SelectLocalReward), nameof(RewardOpened), true);
         hook(typeof(RewardsSetSynchronizer), nameof(RewardsSetSynchronizer.SkipLocalRewardsSet), nameof(RewardsSkipped), true);
+        hook(typeof(RunManager), nameof(RunManager.ProceedFromTerminalRewardsScreen), nameof(TerminalRewardsLeft), true);
         hook(typeof(NCardRewardSelectionScreen), nameof(NCardRewardSelectionScreen.RefreshOptions), nameof(RewardOptions), false);
         hook(typeof(PlayerChoiceSynchronizer), nameof(PlayerChoiceSynchronizer.SyncLocalChoice), nameof(PlayerChoice), true);
     }
@@ -85,7 +88,8 @@ internal static partial class CaptureHooks
         bool available = roomReady && !tree.Paused && !manager.IsPaused && tree.Root.HasFocus();
         if (available && combatRoom && CombatManager.Instance.IsInProgress)
         {
-            var selecting = NOverlayStack.Instance?.Peek() is NCardGridSelectionScreen;
+            var selecting = NOverlayStack.Instance?.Peek() is NCardGridSelectionScreen ||
+                MegaCrit.Sts2.Core.Nodes.Rooms.NCombatRoom.Instance?.Ui?.Hand?.IsInCardSelection == true;
             available = selecting || (run!.Players[0].PlayerCombatState?.Phase == PlayerTurnPhase.Play
                 && !CombatManager.Instance.PlayerActionsDisabled && !manager.ActionExecutor.IsRunning);
         }
@@ -224,12 +228,25 @@ internal static partial class CaptureHooks
     private static void RewardOpened(Reward reward)
     {
         if (Recording) Observe(() => ReplayStore.Add("reward", reward.Description.GetFormattedText(), decisionSeconds: TakeTime(),
-            actionKey: $"open:{reward.GetType().FullName}", actionIndex: reward.RewardsSetIndex));
+            actionKey: RewardChoices.OpenKey(reward), actionIndex: reward.RewardsSetIndex));
     }
 
     private static void RewardsSkipped()
     {
         if (Recording) Observe(() => ReplayStore.Add("reward", "结束奖励选择", decisionSeconds: TakeTime(), actionKey: "skip-set"));
+    }
+
+    private static void TerminalRewardsLeft()
+    {
+        if (!Recording || NOverlayStack.Instance?.Peek() is not NRewardsScreen screen) return;
+        Observe(() =>
+        {
+            var set = AccessTools.Field(typeof(NRewardsScreen), "_rewardsSet")?.GetValue(screen) as RewardsSet;
+            if (set == null) return;
+            bool remaining = !set.AllRewardsSuccessfullySelected;
+            ReplayStore.Add("reward", remaining ? "跳过剩余奖励" : "结束奖励选择", decisionSeconds: TakeTime(),
+                actionKey: remaining ? "skip-set" : "leave-set");
+        });
     }
 
     private static void RewardOptions(NCardRewardSelectionScreen __instance,

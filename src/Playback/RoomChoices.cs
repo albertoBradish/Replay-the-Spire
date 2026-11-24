@@ -13,11 +13,17 @@ namespace SpireReplay.Playback;
 
 // Room checkpoints restore the original native presentation. Apply a decision
 // only when both the recorded index and the durable option ID match that room.
-internal sealed class RoomChoices(RunState run, IReadOnlyList<ReplayEvent> timeline)
+internal sealed class RoomChoices(RunState run, IReadOnlyList<ReplayEvent> timeline, bool inEventBattle = false)
 {
+    private readonly RewardChoices rewards = new();
+
     internal Task<bool> ApplyAsync(int index)
     {
         var entry = timeline[index];
+        if (entry.Kind == "event-resume")
+            return ResumeAsync(entry.ActionKey);
+        if (entry.Kind == "reward")
+            return rewards.ApplyAsync(entry, index + 1 < timeline.Count ? timeline[index + 1] : null);
         if (entry.Kind == "map" && NMapScreen.Instance is { } map)
         {
             string[] coordinate = entry.ActionKey.Split(',');
@@ -37,7 +43,7 @@ internal sealed class RoomChoices(RunState run, IReadOnlyList<ReplayEvent> timel
             }
         }
         if (entry.Kind == "treasure" && run.CurrentRoom is TreasureRoom && NRun.Instance?.TreasureRoom is { } chest &&
-            entry.ActionIndex is int relic && relic >= 0 && !timeline.Any(e => e.Kind == "reward"))
+            entry.ActionIndex is int relic && relic >= -1 && !timeline.Any(e => e.Kind == "reward"))
             return OpenTreasureAsync(chest, relic, entry.ActionKey);
         if (entry.Kind is not ("event" or "camp" or "shop"))
             return Task.FromResult(false);
@@ -48,7 +54,8 @@ internal sealed class RoomChoices(RunState run, IReadOnlyList<ReplayEvent> timel
     private async Task<bool> OpenTreasureAsync(NTreasureRoom chest, int index, string key)
     {
         var picking = RunManager.Instance.TreasureRoomRelicSynchronizer;
-        if (picking.CurrentRelics is not { } relics || index >= relics.Count || relics[index].Id.ToString() != key)
+        if (picking.CurrentRelics is not { } relics || index >= relics.Count ||
+            (index == -1 ? key != "skip" : relics[index].Id.ToString() != key))
             return false;
         var open = typeof(NTreasureRoom).GetMethod("OpenChest",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
@@ -67,7 +74,7 @@ internal sealed class RoomChoices(RunState run, IReadOnlyList<ReplayEvent> timel
         }
         if (!GodotObject.IsInstanceValid(chest) || !chest.IsInsideTree())
             return false;
-        picking.OnPicked(run.Players[0], index);
+        picking.OnPicked(run.Players[0], index < 0 ? null : index);
         await animation;
         return true;
     }
@@ -80,7 +87,7 @@ internal sealed class RoomChoices(RunState run, IReadOnlyList<ReplayEvent> timel
         {
             case ("event", EventRoom room):
                 var model = room.LocalMutableEvent;
-                if (option >= model.CurrentOptions.Count || model.CanonicalEncounter != null)
+                if (option >= model.CurrentOptions.Count || model.CanonicalEncounter != null && !inEventBattle)
                     return false;
                 var eventOption = model.CurrentOptions[option];
                 if (eventOption.TextKey != entry.ActionKey || eventOption.IsLocked || eventOption.IsProceed ||
@@ -120,6 +127,21 @@ internal sealed class RoomChoices(RunState run, IReadOnlyList<ReplayEvent> timel
             default:
                 return false;
         }
+    }
+
+    private async Task<bool> ResumeAsync(string key)
+    {
+        if (run.CurrentRoom is CombatRoom { IsPreFinished: true, ShouldResumeParentEventAfterCombat: true } combat &&
+            combat.ParentEventId?.ToString() == key)
+        {
+            var proceed = typeof(RunManager).GetMethod("ProceedFromTerminalRewardsScreenAsync") ??
+                typeof(RunManager).GetMethod(nameof(RunManager.ProceedFromTerminalRewardsScreen));
+            if (proceed?.Invoke(RunManager.Instance, null) is Task transition)
+                await transition;
+        }
+        if (run.CurrentRoom is not EventRoom room || room.ModelId.ToString() != key)
+            throw new InvalidDataException("战斗结束后的事件与记录不同。");
+        return true;
     }
 
     private List<string> ChildSelections(int index)

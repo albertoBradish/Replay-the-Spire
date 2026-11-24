@@ -2,6 +2,7 @@ using Godot;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Assets;
 using MegaCrit.Sts2.Core.Nodes;
+using MegaCrit.Sts2.Core.Nodes.Rooms;
 using MegaCrit.Sts2.Core.Runs;
 using MegaCrit.Sts2.Core.Saves;
 using MegaCrit.Sts2.Core.Multiplayer.Replay;
@@ -33,6 +34,7 @@ public static class ReplayPlayer
     public static int DecisionCount => current?.DecisionCount ?? 0;
     public static int CurrentDecision => current?.Decision ?? 0;
     public static double Speed => speed;
+    public static bool OriginalTiming { get; set; }
     public static string Status => current?.Status ?? lastStatus;
 
     public static void Install(Harmony harmony)
@@ -46,21 +48,28 @@ public static class ReplayPlayer
             postfix: new HarmonyMethod(typeof(ReplayPlayer), nameof(WaitForMenuOnExit)));
         harmony.Patch(AccessTools.Method(typeof(NGame), nameof(NGame.Quit)),
             prefix: new HarmonyMethod(typeof(ReplayPlayer), nameof(Quitting)));
+        harmony.Patch(AccessTools.Method(typeof(NEventRoom), "SetupLayout"),
+            postfix: new HarmonyMethod(typeof(ReplayPlayer), nameof(EventLayoutStarted)));
     }
 
-    public static Task PlayAsync(byte[] combat, int turn = 0) => StartAsync(combat, turn, -1, null);
+    public static Task PlayAsync(byte[] combat, int turn = 0) => PlayAsync(combat, turn, null);
 
-    public static Task PlayDecisionAsync(byte[] combat, int decision) =>
-        StartAsync(combat, 0, Math.Max(1, decision), null);
+    public static Task PlayAsync(byte[] combat, int turn, IReadOnlyList<ReplayEvent>? timeline) =>
+        StartAsync(combat, turn, -1, null, timeline);
+
+    public static Task PlayDecisionAsync(byte[] combat, int decision) => PlayDecisionAsync(combat, decision, null);
+
+    public static Task PlayDecisionAsync(byte[] combat, int decision, IReadOnlyList<ReplayEvent>? timeline) =>
+        StartAsync(combat, 0, checked(Math.Max(1, decision) + new BattleTimeline(timeline).Before.Length), null, timeline);
 
     public static Task PlayRoomAsync(byte[] checkpoint, IReadOnlyList<ReplayEvent> events, int decision = 0) =>
         StartAsync(checkpoint, 0, decision > 0 ? decision : -1, events);
 
     public static Task SeekTurnAsync(int turn) =>
-        current is { RoomEvents: null } session ? StartAsync(session.Data, Math.Max(1, turn), -1, null) : Task.CompletedTask;
+        current is { RoomEvents: null } session ? StartAsync(session.Data, Math.Max(1, turn), -1, null, session.CombatTimeline) : Task.CompletedTask;
 
     public static Task SeekDecisionAsync(int decision) =>
-        current is { } session ? StartAsync(session.Data, 0, Math.Max(0, decision), session.RoomEvents) : Task.CompletedTask;
+        current is { } session ? StartAsync(session.Data, 0, Math.Max(0, decision), session.RoomEvents, session.CombatTimeline) : Task.CompletedTask;
 
     public static void SetPaused(bool paused) => current?.SetPaused(paused);
 
@@ -74,7 +83,8 @@ public static class ReplayPlayer
 
     public static void Step() => current?.Step();
 
-    private static async Task StartAsync(byte[] data, int turn, int decision, IReadOnlyList<ReplayEvent>? roomEvents)
+    private static async Task StartAsync(byte[] data, int turn, int decision, IReadOnlyList<ReplayEvent>? roomEvents,
+        IReadOnlyList<ReplayEvent>? combatTimeline = null)
     {
         await transition.WaitAsync();
         try
@@ -101,7 +111,7 @@ public static class ReplayPlayer
             await menuAssets;
             if (SaveManager.Instance.CurrentRunSaveTask is { } pendingSave)
                 await pendingSave;
-            var session = new ReplaySession(data, replay, turn, decision, roomEvents);
+            var session = new ReplaySession(data, replay, turn, decision, roomEvents, combatTimeline);
             current = session;
             try
             {
@@ -173,6 +183,8 @@ public static class ReplayPlayer
         if (name == "Common")
             menuAssets = __result.WaitForCompletion();
     }
+
+    private static void EventLayoutStarted(Task __result) => current?.RememberEventLayout(__result);
 
     private static void WaitForMenuOnExit(ref Task __result)
     {

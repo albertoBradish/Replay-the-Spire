@@ -1,5 +1,6 @@
 using System.Globalization;
 using HarmonyLib;
+using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Entities.Models;
 using MegaCrit.Sts2.Core.Entities.Multiplayer;
 using MegaCrit.Sts2.Core.Entities.Players;
@@ -40,7 +41,7 @@ internal static class RoomChoiceAnswers
 
     private static void Answer(PlayerChoiceSynchronizer __instance, Player player, uint choiceId)
     {
-        if (!ReplayPlayer.IsRoomTimeline || answers.Value is not { } queue)
+        if (!ReplayPlayer.IsActive || CombatManager.Instance.IsInProgress || answers.Value is not { } queue)
             return;
         if (!queue.TryDequeue(out var value))
             throw new InvalidDataException("该节点缺少选牌记录。");

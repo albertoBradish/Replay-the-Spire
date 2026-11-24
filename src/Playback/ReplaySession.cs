@@ -1,20 +1,24 @@
 using System.Diagnostics;
 using Godot;
+using HarmonyLib;
 using MegaCrit.Sts2.Core.Assets;
 using MegaCrit.Sts2.Core.Combat;
+using MegaCrit.Sts2.Core.Entities.Models;
 using MegaCrit.Sts2.Core.Entities.Multiplayer;
 using MegaCrit.Sts2.Core.GameActions;
 using MegaCrit.Sts2.Core.Multiplayer.Game;
 using MegaCrit.Sts2.Core.Multiplayer.Replay;
 using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Nodes.Audio;
+using MegaCrit.Sts2.Core.Nodes.Events;
+using MegaCrit.Sts2.Core.Nodes.Rooms;
 using MegaCrit.Sts2.Core.Rooms;
 using MegaCrit.Sts2.Core.Runs;
 
 namespace SpireReplay.Playback;
 
 internal sealed class ReplaySession(byte[] data, CombatReplay replay, int targetTurn, int targetDecision,
-    IReadOnlyList<ReplayEvent>? roomEvents)
+    IReadOnlyList<ReplayEvent>? roomEvents, IReadOnlyList<ReplayEvent>? combatTimeline)
 {
     private readonly SceneTree tree = NGame.Instance!.GetTree();
     private readonly double previousTimeScale = Engine.TimeScale;
@@ -28,13 +32,22 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
     private bool seeking = targetTurn > 0 || targetDecision >= 0;
     private bool stepToNext;
     private int stepFrom;
+    private DecisionCaption? caption;
+    private Task eventLayout = Task.CompletedTask;
+    private readonly BattleTimeline timeline = new(combatTimeline);
+    private readonly Dictionary<int, double> decisionTimes = combatTimeline?
+        .Where(e => e.Kind == "choice" && e.ActionKey == "combat" && e.ActionIndex.HasValue &&
+            e.DecisionSeconds is double time && double.IsFinite(time) && time > 0)
+        .GroupBy(e => e.ActionIndex!.Value).ToDictionary(g => g.Key, g => g.First().DecisionSeconds!.Value) ?? [];
 
     internal byte[] Data { get; } = data;
     internal CombatReplay Replay { get; } = replay;
     internal IReadOnlyList<ReplayEvent>? RoomEvents { get; } = roomEvents;
-    internal int Length => RoomEvents?.Count ?? Replay.events.Count;
-    internal int DecisionCount { get; } = roomEvents?.Count ?? replay.events.Count(e =>
+    internal IReadOnlyList<ReplayEvent>? CombatTimeline { get; } = combatTimeline;
+    internal int Length => RoomEvents?.Count ?? Replay.events.Count + timeline.Before.Length + timeline.After.Length;
+    private readonly int combatDecisions = replay.events.Count(e =>
         e.eventType == CombatReplayEventType.GameAction && e.action is not NetReadyToBeginEnemyTurnAction);
+    internal int DecisionCount => RoomEvents?.Count ?? combatDecisions + timeline.Before.Length + timeline.After.Length;
     internal bool Ready { get; private set; }
     internal bool Closing { get; private set; }
     internal bool Finished { get; private set; }
@@ -77,7 +90,27 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
         var previousRoom = AbstractRoom.FromSerializable(Replay.serializableRun.PreFinishedRoom, run);
         await manager.LoadIntoLatestMapCoord(previousRoom);
         CheckActive();
-        if (RoomEvents == null)
+        if (run.CurrentRoom is EventRoom)
+        {
+            await eventLayout;
+            CheckActive();
+            if (NEventRoom.Instance?.Layout is NAncientEventLayout ancient)
+            {
+                var last = AccessTools.Property(typeof(NAncientEventLayout), "IsDialogueOnLastLine");
+                var advance = AccessTools.Method(typeof(NAncientEventLayout), "OnDialogueHitboxClicked");
+                // Dialogue navigation reveals the buttons without choosing an option.
+                while (last.GetValue(ancient) is false)
+                    advance.Invoke(ancient, [null]);
+            }
+            await tree.ToSignal(tree.CreateTimer(1.55), SceneTreeTimer.SignalName.Timeout);
+            CheckActive();
+        }
+        else if (RoomEvents != null && seeking)
+        {
+            await tree.ToSignal(tree.CreateTimer(0.7), SceneTreeTimer.SignalName.Timeout);
+            CheckActive();
+        }
+        if (RoomEvents == null && timeline.Battle == null)
         {
             if (CombatManager.Instance.DebugOnlyGetState() == null)
                 throw new InvalidDataException("该记录的入口未能恢复战斗房间。");
@@ -88,6 +121,8 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
         RefreshClock();
         _ = RoomEvents == null ? FeedAsync(run) : ShowRoomAsync(run, RoomEvents);
     }
+
+    internal void RememberEventLayout(Task setup) => eventLayout = setup;
 
     internal void RefreshClock()
     {
@@ -122,6 +157,8 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
         if (Closing)
             return;
         Closing = true;
+        caption?.Close();
+        caption = null;
         if (tracker != null)
             tracker.ChecksumGenerated -= Verify;
         if (Ready)
@@ -137,7 +174,21 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
         {
             var queues = RunManager.Instance.ActionQueueSet;
             var executor = RunManager.Instance.ActionExecutor;
+            if (timeline.Battle is { } nested)
+            {
+                string[] ids = nested.ActionKey.Split('|');
+                if (ids.Length != 2 || run.CurrentRoom is not EventRoom ev || ev.ModelId.ToString() != ids[0])
+                    throw new InvalidDataException("事件战斗的入口与记录不同。");
+                await PlayChoicesAsync(run, timeline.Before);
+                await Until(() => run.CurrentRoom is CombatRoom && CombatManager.Instance.IsInProgress && !executor.IsPaused);
+                if (run.CurrentRoom is not CombatRoom restored || restored.Encounter.Id.ToString() != ids[1])
+                    throw new InvalidDataException("事件战斗的遭遇与记录不同。");
+                caption?.Close();
+                caption = null;
+            }
             var closed = ClosedDecisionBoundaries(Replay);
+            var selections = new Queue<ReplayEvent>(CombatTimeline?.Where(e =>
+                e.Kind == "choice" && e.Turn > 0 && e.ActionKey != "combat") ?? []);
             int endedTurn = 0;
             bool awaitingNextTurn = false;
             foreach (var entry in Replay.events)
@@ -153,7 +204,8 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
                         player.TurnNumber > endedTurn && player.Phase == PlayerTurnPhase.Play);
                     awaitingNextTurn = false;
                 }
-                if (decision && closed[Cursor])
+                int offset = Cursor - timeline.Before.Length;
+                if (decision && closed[offset])
                 {
                     await Until(() => !executor.IsRunning);
                     lastTurn = Turn;
@@ -163,6 +215,8 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
                         SetPaused(true);
                 }
                 await Until(() => true);
+                if (decision && closed[offset] && decisionTimes.TryGetValue(Decision + 1 - timeline.Before.Length, out double seconds))
+                    await WaitPresentationAsync(seconds, originalOnly: true);
                 switch (entry.eventType)
                 {
                     case CombatReplayEventType.GameAction:
@@ -190,8 +244,15 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
                         queues.EnqueueWithoutSynchronizing(hook);
                         break;
                     case CombatReplayEventType.PlayerChoice:
+                        var result = entry.playerChoiceResult!.Value;
+                        if (selections.TryPeek(out var selection) && IsRecordedSelection(selection, result.type))
+                        {
+                            selections.Dequeue();
+                            if (selection.DecisionSeconds is double duration && double.IsFinite(duration) && duration > 0)
+                                await WaitPresentationAsync(duration, originalOnly: true);
+                        }
                         RunManager.Instance.PlayerChoiceSynchronizer.ReceiveReplayChoice(run.Players[0],
-                            entry.choiceId!.Value, entry.playerChoiceResult!.Value);
+                            entry.choiceId!.Value, result);
                         break;
                     case CombatReplayEventType.ResumeAction:
                         queues.ResumeActionWithoutSynchronizing(entry.actionId!.Value);
@@ -202,8 +263,16 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
                 Cursor++;
             }
             await Until(() => !executor.IsRunning && verifiedCount == expected.Count);
-            Finished = true;
             Verified = verifiedCount > 0;
+            if (tracker != null)
+                tracker.ChecksumGenerated -= Verify;
+            if (timeline.After.Length > 0)
+            {
+                if (timeline.After[0].Kind == "reward")
+                    await WaitForRewardScreen();
+                await PlayChoicesAsync(run, timeline.After);
+            }
+            Finished = true;
             Status = Verified ? $"已播完 · {verifiedCount} 个状态校验通过" : "已播完 · 无状态校验";
         }
         catch (OperationCanceledException) when (Closing) { return; }
@@ -224,38 +293,20 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
         }
     }
 
+    private static bool IsRecordedSelection(ReplayEvent entry, PlayerChoiceType type) => type switch
+    {
+        PlayerChoiceType.Index => entry.ActionKey.StartsWith("index:", StringComparison.Ordinal),
+        PlayerChoiceType.DeckCard => entry.ActionKey.StartsWith("deck:", StringComparison.Ordinal),
+        PlayerChoiceType.CanonicalCard or PlayerChoiceType.MutableCard or PlayerChoiceType.CombatCard =>
+            entry.ActionKey.StartsWith("cards:", StringComparison.Ordinal),
+        _ => false
+    };
+
     private async Task ShowRoomAsync(RunState run, IReadOnlyList<ReplayEvent> timeline)
     {
         try
         {
-            var driver = new RoomChoices(run, timeline);
-            foreach (var entry in timeline)
-            {
-                if (seeking && Decision + 1 >= targetDecision || stepToNext && Decision > stepFrom)
-                {
-                    SetPaused(true);
-                    Status = $"第 {Decision + 1} 个节点 · {entry.Label}";
-                }
-                await Until(() => true);
-                // The caption has its own display time, independent of simulation speed.
-                var applied = driver.ApplyAsync(Cursor);
-                await Until(() => applied.IsCompleted);
-                bool animated = await applied;
-                Status = (animated ? "选择 · " : "记录 · ") + entry.Label;
-                Decision++;
-                Cursor++;
-                double seconds = Math.Clamp(entry.DecisionSeconds ?? 1.4, 1, 3);
-                long previous = Stopwatch.GetTimestamp();
-                while (seconds > 0)
-                {
-                    CheckActive();
-                    await tree.ToSignal(tree, SceneTree.SignalName.ProcessFrame);
-                    long now = Stopwatch.GetTimestamp();
-                    if (!Paused)
-                        seconds -= Stopwatch.GetElapsedTime(previous, now).TotalSeconds * (seeking ? 12 : ReplayPlayer.Speed);
-                    previous = now;
-                }
-            }
+            await PlayChoicesAsync(run, timeline);
             Finished = true;
             Status = timeline.Count > 0 ? "房间记录已播完 · " + timeline[^1].Label : "房间入口";
         }
@@ -274,6 +325,66 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
             seeking = false;
             Paused = true;
             RefreshClock();
+        }
+    }
+
+    private async Task PlayChoicesAsync(RunState run, IReadOnlyList<ReplayEvent> timeline)
+    {
+        var driver = new RoomChoices(run, timeline, this.timeline.Battle != null);
+        for (int i = 0; i < timeline.Count; i++)
+        {
+            var entry = timeline[i];
+            if (seeking && targetDecision >= 0 && Decision + 1 >= targetDecision || stepToNext && Decision > stepFrom)
+            {
+                SetPaused(true);
+                Status = $"第 {Decision + 1} 个节点 · {entry.Label}";
+            }
+            await Until(() => true);
+            if (entry.DecisionSeconds is double seconds && double.IsFinite(seconds) && seconds > 0)
+                await WaitPresentationAsync(seconds, originalOnly: true);
+            if (entry.Kind == "event-resume" && run.CurrentRoom is CombatRoom context && !context.Encounter.ShouldGiveRewards)
+                await Until(() => run.CurrentRoom is EventRoom && NEventRoom.Instance != null);
+            var applied = driver.ApplyAsync(i);
+            await Until(() => applied.IsCompleted);
+            bool animated = await applied;
+            Status = (animated ? "选择 · " : "记录 · ") + entry.Label;
+            caption ??= new DecisionCaption(tree);
+            caption.Show(entry, animated);
+            Decision++;
+            Cursor++;
+            await WaitPresentationAsync(1.65);
+        }
+    }
+
+    private async Task WaitPresentationAsync(double seconds, bool originalOnly = false)
+    {
+        long previous = Stopwatch.GetTimestamp();
+        while (seconds > 0 && !seeking && !stepToNext && (!originalOnly || ReplayPlayer.OriginalTiming))
+        {
+            CheckActive();
+            await tree.ToSignal(tree, SceneTree.SignalName.ProcessFrame);
+            long now = Stopwatch.GetTimestamp();
+            if (!Paused)
+                seconds -= Stopwatch.GetElapsedTime(previous, now).TotalSeconds * ReplayPlayer.Speed;
+            previous = now;
+        }
+        await Until(() => true);
+    }
+
+    private async Task WaitForRewardScreen()
+    {
+        // CombatWon schedules rewards after the monster's death animation. Give the
+        // native screen time to open even during a seek or single-step.
+        double remaining = 9;
+        long previous = Stopwatch.GetTimestamp();
+        while (!RewardChoices.Visible && remaining > 0)
+        {
+            CheckActive();
+            await tree.ToSignal(tree, SceneTree.SignalName.ProcessFrame);
+            long now = Stopwatch.GetTimestamp();
+            if (!Paused)
+                remaining -= Stopwatch.GetElapsedTime(previous, now).TotalSeconds * (seeking ? 8 : ReplayPlayer.Speed);
+            previous = now;
         }
     }
 
@@ -301,7 +412,7 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
 
     private void Verify(NetChecksumData actual, string context, NetFullCombatState state)
     {
-        if (Closing || Finished || mismatch != null || tracker == null)
+        if (Closing || Finished || mismatch != null || tracker == null || !CombatManager.Instance.IsInProgress)
             return;
         if (!expected.TryGetValue(actual.id, out var original) ||
             tracker.GenerateChecksum(original.fullState) != actual.checksum)

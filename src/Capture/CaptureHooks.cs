@@ -28,6 +28,7 @@ internal static partial class CaptureHooks
     private static bool roomReady;
     private static bool combatRoom;
     private static bool playableCombat;
+    private static bool embeddedCombat;
     private static bool hasRoom;
     private static SerializableRun? nextCheckpoint;
     private static readonly AccessTools.FieldRef<CombatReplayWriter, CombatReplay?> CurrentReplay =
@@ -99,6 +100,18 @@ internal static partial class CaptureHooks
         if (!Recording || isRestoringRoomStackBase || (room is MapRoom && hasRoom)) return;
         roomReady = false;
         combatRoom = room is CombatRoom;
+        if (room is CombatRoom { ParentEventId: not null, IsPreFinished: false } nested &&
+            hasRoom && run!.CurrentRoom is EventRoom parent && parent.ModelId == nested.ParentEventId)
+        {
+            // The game's writer keeps this floor's pre-event snapshot and all combat
+            // actions. The original event choices recreate the mutable parent and RNG.
+            embeddedCombat = playableCombat = true;
+            ResetChoices();
+            ReplayStore.Add("event-battle", nested.Encounter.Title.GetFormattedText(),
+                actionKey: $"{parent.ModelId}|{nested.Encounter.Id}");
+            return;
+        }
+        embeddedCombat = false;
         playableCombat = room is CombatRoom battle && battle.ParentEventId == null && run!.CurrentRoomCount == 0 && !room.IsPreFinished;
         ResetChoices();
         var title = room switch
@@ -136,8 +149,11 @@ internal static partial class CaptureHooks
         Observe(() =>
         {
             combatRoom = playableCombat = false;
-            ReplayStore.BeginRoom(run!.TotalFloor, __instance.CanonicalEvent.Title.GetFormattedText());
-            ReplayStore.Add("event", "返回事件");
+            if (!embeddedCombat)
+                ReplayStore.BeginRoom(run!.TotalFloor, __instance.CanonicalEvent.Title.GetFormattedText());
+            ReplayStore.Add(embeddedCombat ? "event-resume" : "event", __instance.CanonicalEvent.Title.GetFormattedText(),
+                actionKey: __instance.ModelId.ToString());
+            embeddedCombat = false;
             ResetChoices();
             roomReady = true;
         });
@@ -185,7 +201,7 @@ internal static partial class CaptureHooks
             CombatManager.Instance.TurnStarted -= NewTurn;
         }
         run = null;
-        roomReady = combatRoom = playableCombat = hasRoom = false;
+        roomReady = combatRoom = playableCombat = embeddedCombat = hasRoom = false;
         nextCheckpoint = null;
         ResetChoices();
     }
