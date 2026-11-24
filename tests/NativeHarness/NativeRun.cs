@@ -91,6 +91,7 @@ public static class NativeRun
             else if (phase == "facilities-watch") await FacilityAcceptance.WatchAsync();
             else if (phase == "choices-record") await CombatChoicesAcceptance.RecordAsync(game);
             else if (phase == "choices-watch") await CombatChoicesAcceptance.WatchAsync();
+            else if (phase == "timing-watch") await TimingAcceptance.WatchAsync();
             else if (phase == "timing") await TimingAcceptance.RunAsync(game);
             else if (phase == "modded-record") await ModdedAcceptance.RecordAsync(game);
             else if (phase == "modded-watch") await ModdedAcceptance.WatchAsync();

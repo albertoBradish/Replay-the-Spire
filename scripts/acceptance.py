@@ -84,7 +84,9 @@ native("control", profile="receiver")
 native("transfer", profile="receiver", extra=("--import-file", str(encoded[0])))
 # Continue the original native save before creating any unrelated fixture.
 record_and_watch("resume")
-native("timing")
+if native("timing"):
+    native("control")
+    native("timing-watch")
 for scope in ("choices", "facilities", "reward", "event-battle", "characters", "journey"):
     record_and_watch(scope)
 if any(r["phase"] == "journey-record" and r["passed"] for r in results):
