@@ -95,7 +95,7 @@ native("damage-record")
 if native("timing"):
     native("control")
     native("timing-watch")
-for scope in ("choices", "facilities", "reward", "event-battle", "event-grid", "crystal", "characters", "journey"):
+for scope in ("choices", "facilities", "reward", "event-battle", "event-grid", "crystal", "courier", "characters", "journey"):
     record_and_watch(scope)
 if any(r["phase"] == "journey-record" and r["passed"] for r in results):
     native("forum-album")

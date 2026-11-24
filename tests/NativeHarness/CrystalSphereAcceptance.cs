@@ -48,7 +48,7 @@ internal static class CrystalSphereAcceptance
 #endif
         var player = run.Players.Single();
         await PlayerCmd.GainGold(150, player);
-        await ReachSphereAsync(run, player);
+        await ReachActTwoEventAsync(run, player, ModelDb.Event<CrystalSphere>());
         var room = run.CurrentRoom as EventRoom;
         Require(room?.CanonicalEvent is CrystalSphere, "ordinary map roll must open Crystal Sphere");
         var option = room!.LocalMutableEvent.CurrentOptions[1];
@@ -113,7 +113,7 @@ internal static class CrystalSphereAcceptance
         GD.Print("REPLAY_CRYSTAL_RECORD_PASS");
     }
 
-    private static async Task ReachSphereAsync(RunState run, Player player)
+    internal static async Task ReachActTwoEventAsync(RunState run, Player player, EventModel target)
     {
         // The event is only eligible from act two. Win act one so the native
         // resume screen, event pool and replay all see the same complete history.
@@ -136,7 +136,7 @@ internal static class CrystalSphereAcceptance
             for (int i = 0; i < 240; i++)
             {
                 await JourneyAcceptance.Wait(() => run.CurrentRoom != null, "connected crystal fixture room");
-                if (run.CurrentRoom is EventRoom { CanonicalEvent: CrystalSphere }) return;
+                if (run.CurrentRoom is EventRoom eventRoom && eventRoom.CanonicalEvent.Id == target.Id) return;
                 var room = run.CurrentRoom!;
                 var map = NMapScreen.Instance!;
                 if (run.CurrentActIndex == 1 && map.IsOpen && map.IsTravelEnabled)
@@ -150,7 +150,7 @@ internal static class CrystalSphereAcceptance
                     if (next.Point.PointType == MapPointType.Unknown)
                     {
                         var pool = (RoomSet)AccessTools.Field(typeof(ActModel), "_rooms").GetValue(run.Act)!;
-                        pool.events[pool.eventsVisited % pool.events.Count] = ModelDb.Event<CrystalSphere>();
+                        pool.events[pool.eventsVisited % pool.events.Count] = target;
                         var odds = run.Odds.UnknownMapPoint;
                         odds.MonsterOdds = odds.TreasureOdds = odds.ShopOdds = 0;
                     }
