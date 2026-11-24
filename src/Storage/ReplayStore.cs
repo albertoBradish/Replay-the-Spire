@@ -123,8 +123,19 @@ public static class ReplayStore
     static void FlushPending()
     {
         if (active == null || room < 0 || Pending.Count == 0) return;
-        using (var writer = new StreamWriter(RoomPath(active.Id, room, "jsonl"), true, new UTF8Encoding(false)))
+        using var stream = new FileStream(RoomPath(active.Id, room, "jsonl"), FileMode.OpenOrCreate,
+            FileAccess.ReadWrite, FileShare.Read);
+        long original = stream.Seek(0, SeekOrigin.End);
+        try
+        {
+            using var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: true) { NewLine = "\n" };
             foreach (var item in Pending) writer.WriteLine(JsonSerializer.Serialize(item, Json));
+        }
+        catch
+        {
+            stream.SetLength(original);
+            throw;
+        }
         Pending.Clear();
     }
 
@@ -186,9 +197,24 @@ public static class ReplayStore
             if (active?.Id == id && room == index) FlushPending();
             string path = RoomPath(id, index, "jsonl");
             if (!File.Exists(path)) return [];
-            return File.ReadLines(path).Where(l => l.Length != 0)
-                .Select(l => JsonSerializer.Deserialize<ReplayEvent>(l, Json) ?? throw new InvalidDataException("Invalid event.")).ToList();
+            var result = new List<ReplayEvent>();
+            using var source = new StreamReader(path, Encoding.UTF8);
+            while (source.ReadLine() is { } line)
+            {
+                if (line.Length == 0) continue;
+                try { result.Add(JsonSerializer.Deserialize<ReplayEvent>(line, Json) ?? throw new InvalidDataException("Invalid event.")); }
+                catch (JsonException) when (source.EndOfStream && HasIncompleteTail(path)) { break; }
+            }
+            return result;
         }
+    }
+
+    static bool HasIncompleteTail(string path)
+    {
+        using var check = File.OpenRead(path);
+        if (check.Length == 0) return false;
+        check.Seek(-1, SeekOrigin.End);
+        return check.ReadByte() != 10;
     }
 
     public static RoomData LoadRoom(string id, int index)
@@ -235,7 +261,14 @@ public static class ReplayStore
                 foreach (var name in RunFiles(info))
                 {
                     string file = Path.Combine(RunPath(info.Id), name);
-                    if (File.Exists(file)) archive.CreateEntryFromFile(file, name, CompressionLevel.Fastest);
+                    if (!File.Exists(file)) continue;
+                    if (name.EndsWith(".jsonl", StringComparison.Ordinal) && HasIncompleteTail(file))
+                    {
+                        int i = int.Parse(name.AsSpan(5, 4), System.Globalization.CultureInfo.InvariantCulture);
+                        using var repaired = new StreamWriter(archive.CreateEntry(name, CompressionLevel.Fastest).Open(), new UTF8Encoding(false));
+                        foreach (var entry in LoadEvents(id: info.Id, index: i)) repaired.WriteLine(JsonSerializer.Serialize(entry, Json));
+                    }
+                    else archive.CreateEntryFromFile(file, name, CompressionLevel.Fastest);
                 }
             File.Move(temp, path, true);
             return path;

@@ -28,6 +28,8 @@ try
     var album = Gallery.Export(run.Id, -1);
     Check(File.ReadAllText(album).Contains("timeline-001.svg") &&
         File.ReadAllText(Path.Combine(Gallery.FrameDirectory(run.Id, 1), "timeline-001.svg")).Contains("&lt;"), "gallery escaping");
+    File.AppendAllText(Path.Combine(ReplayStore.LibraryDirectory, run.Id, "room-0000.jsonl"), "{");
+    Check(ReplayStore.LoadEvents(run.Id, 0).Count == 2, "recover final interrupted record");
     string file = ReplayStore.Export(run.Id);
     Configure("import");
     var id = ReplayStore.Import(file);
