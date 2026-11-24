@@ -123,7 +123,7 @@ internal static class VideoAcceptance
             // FMOD and AAC conversion can leave one- and two-LSB dither in a muted track.
             if (mutedChoice == "ExportSilent" ? amplitude > -82 || mean > -89 : amplitude <= -70)
                 throw new InvalidDataException($"Unexpected audio for {mutedChoice ?? "normal export"}: {peak.Value}, {rms.Value}");
-            string video = await Decode(ffmpeg, path, "-map", "0:v:0", "-frames:v", "1", "-f", "null", "-");
+            string video = await Decode(ffmpeg, path, "-map", "0:v:0", "-f", "null", "-");
             if (!Regex.IsMatch(video, @"Video:\s*h264") || !video.Contains("30 fps") ||
                 !Regex.IsMatch(video, @"Audio:\s*aac"))
                 throw new InvalidDataException("Expected H.264 at 30 fps and AAC in exported file");
@@ -238,7 +238,7 @@ internal static class VideoAcceptance
         {
             UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true
         };
-        foreach (var arg in new[] { "-nostdin", "-hide_banner", "-i", source }.Concat(args)) start.ArgumentList.Add(arg);
+        foreach (var arg in new[] { "-nostdin", "-nostats", "-hide_banner", "-xerror", "-i", source }.Concat(args)) start.ArgumentList.Add(arg);
         using var process = Process.Start(start) ?? throw new IOException("Failed to start FFmpeg for acceptance");
         string report = await process.StandardError.ReadToEndAsync();
         await process.WaitForExitAsync();
