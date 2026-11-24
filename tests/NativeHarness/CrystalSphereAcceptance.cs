@@ -5,6 +5,7 @@ using System.Text.Json;
 using Godot;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Commands;
+using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Events.Custom.CrystalSphereEvent;
 using MegaCrit.Sts2.Core.Events.Custom.CrystalSphereEvent.CrystalSphereItems;
@@ -47,14 +48,7 @@ internal static class CrystalSphereAcceptance
 #endif
         var player = run.Players.Single();
         await PlayerCmd.GainGold(150, player);
-        await RunManager.Instance.EnterAct(1, false);
-        var pool = (RoomSet)AccessTools.Field(typeof(ActModel), "_rooms").GetValue(run.Act)!;
-        pool.events[pool.eventsVisited % pool.events.Count] = ModelDb.Event<CrystalSphere>();
-        var odds = run.Odds.UnknownMapPoint;
-        odds.MonsterOdds = odds.TreasureOdds = odds.ShopOdds = 0;
-        var point = run.Map.GetAllMapPoints().Where(p => p.PointType == MapPointType.Unknown)
-            .OrderBy(p => p.coord.row).ThenBy(p => p.coord.col).First();
-        await RunManager.Instance.EnterMapCoord(point.coord);
+        await ReachSphereAsync(run, player);
         var room = run.CurrentRoom as EventRoom;
         Require(room?.CanonicalEvent is CrystalSphere, "ordinary map roll must open Crystal Sphere");
         var option = room!.LocalMutableEvent.CurrentOptions[1];
@@ -119,6 +113,65 @@ internal static class CrystalSphereAcceptance
         GD.Print("REPLAY_CRYSTAL_RECORD_PASS");
     }
 
+    private static async Task ReachSphereAsync(RunState run, Player player)
+    {
+        // The event is only eligible from act two. Win act one so the native
+        // resume screen, event pool and replay all see the same complete history.
+        double speed = Engine.TimeScale;
+        try
+        {
+            Engine.TimeScale = 6;
+            await CreatureCmd.SetMaxHp(player.Creature, 1000);
+            await CreatureCmd.SetCurrentHp(player.Creature, 1000);
+            await CardPileCmd.RemoveFromDeck(player.Deck.Cards.ToArray(), false);
+            for (int i = 0; i < 6; i++)
+            {
+                var scythe = (TheScythe)run.CreateCard(ModelDb.Card<TheScythe>(), player);
+                scythe.IncreasedDamage = 986;
+                scythe.CurrentDamage = 999;
+                await CardPileCmd.Add(scythe, PileType.Deck);
+                await CardPileCmd.Add(run.CreateCard(ModelDb.Card<Clash>(), player), PileType.Deck);
+            }
+            var driver = new CampaignAcceptance.CampaignDriver(run, player);
+            for (int i = 0; i < 240; i++)
+            {
+                await JourneyAcceptance.Wait(() => run.CurrentRoom != null, "connected crystal fixture room");
+                if (run.CurrentRoom is EventRoom { CanonicalEvent: CrystalSphere }) return;
+                var room = run.CurrentRoom!;
+                var map = NMapScreen.Instance!;
+                if (run.CurrentActIndex == 1 && map.IsOpen && map.IsTravelEnabled)
+                {
+                    NMapPoint[] nodes = [];
+                    await JourneyAcceptance.Wait(() => !map.IsTraveling && (nodes = map.FindChildren("*", "", true, false)
+                        .OfType<NMapPoint>().Where(n => n.State == MapPointState.Travelable).ToArray()).Length > 0,
+                        "connected path to a second-act question mark");
+                    var next = nodes.OrderBy(n => FloorsToEvent(n.Point)).ThenBy(n => n.Point.coord.col).First();
+                    Require(FloorsToEvent(next.Point) < 100, "a reachable second-act question mark");
+                    if (next.Point.PointType == MapPointType.Unknown)
+                    {
+                        var pool = (RoomSet)AccessTools.Field(typeof(ActModel), "_rooms").GetValue(run.Act)!;
+                        pool.events[pool.eventsVisited % pool.events.Count] = ModelDb.Event<CrystalSphere>();
+                        var odds = run.Odds.UnknownMapPoint;
+                        odds.MonsterOdds = odds.TreasureOdds = odds.ShopOdds = 0;
+                    }
+                    map.OnMapPointSelectedLocally(next);
+                    await JourneyAcceptance.Wait(() => run.CurrentRoom != null && run.CurrentRoom != room && !map.IsTraveling,
+                        "map vote advances to the selected node");
+                }
+                else await driver.VisitAsync(room);
+                Require(!player.Creature.IsDead && run.CurrentActIndex < 2, "alive on the crystal fixture route");
+            }
+            throw new TimeoutException("The connected route did not reach the second-act Crystal Sphere.");
+        }
+        finally { Engine.TimeScale = speed; }
+    }
+
+    private static int FloorsToEvent(MapPoint point)
+    {
+        if (point.PointType == MapPointType.Unknown) return 0;
+        return point.Children.Count == 0 ? 100 : 1 + point.Children.Min(FloorsToEvent);
+    }
+
     internal static async Task WatchAsync()
     {
         var expected = JsonSerializer.Deserialize<Witness>(File.ReadAllText(Report))!;
@@ -130,7 +183,24 @@ internal static class CrystalSphereAcceptance
         try
         {
             ReplayPlayer.SetSpeed(4);
-            await ReplayPlayer.PlayRoomAsync(data.Checkpoint!, data.Events);
+            int secondCell = data.Events.FindIndex(e => e.Kind == "crystal" && e.ActionKey.StartsWith("cell:") && e.Amount == 5);
+            Require(secondCell >= 0, "second recorded cell");
+            await ReplayPlayer.PlayRoomAsync(data.Checkpoint!, data.Events, secondCell + 1);
+            await JourneyAcceptance.Wait(() => ReplayPlayer.IsPaused || ReplayPlayer.IsFinished, "seek to second crystal cell");
+            var screen = NOverlayStack.Instance?.Peek() as NCrystalSphereScreen;
+            Require(!ReplayPlayer.HasError && !ReplayPlayer.IsFinished && screen != null, "paused on the live crystal board");
+            var board = Grid(screen!);
+            string beforeStep = Probe.Fingerprint(board);
+            Require(board.DivinationCount == 5 && probe.Actions.Count(a => a.StartsWith("cell:")) == 1, "first cell restored before second input");
+            ulong start = Time.GetTicksMsec();
+            await JourneyAcceptance.Wait(() => Time.GetTicksMsec() - start >= 600, "hold the board at a recorded decision");
+            Require(ReplayPlayer.IsPaused && Probe.Fingerprint(board) == beforeStep, "paused fog and divinations stay unchanged");
+            ReplayPlayer.Step();
+            await JourneyAcceptance.Wait(() => ReplayPlayer.HasError || ReplayPlayer.IsPaused && board.DivinationCount == 4,
+                "single-step the second crystal cell");
+            Require(!ReplayPlayer.HasError && probe.Actions.Count(a => a.StartsWith("cell:")) == 2 &&
+                Probe.Fingerprint(board) != beforeStep, "exactly one cell input applied after stepping");
+            ReplayPlayer.SetPaused(false);
             await JourneyAcceptance.Wait(() => ReplayPlayer.IsFinished || ReplayPlayer.HasError, "native crystal replay", 85);
             Require(!ReplayPlayer.HasError && probe.Actions.SequenceEqual(expected.Actions), "replayed native tool/cell/proceed sequence");
             Require(probe.Opened == expected.Opened && probe.Closed == expected.Closed, "native item positions and final fog");
@@ -233,7 +303,7 @@ internal static class CrystalSphereAcceptance
             current!.Closed = Fingerprint(Grid(__instance));
             current.Actions.Add("proceed");
         }
-        private static string Fingerprint(CrystalSphereMinigame grid)
+        internal static string Fingerprint(CrystalSphereMinigame grid)
         {
             var items = grid.Items.Select(i =>
             {
