@@ -7,6 +7,7 @@ using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Commands;
 using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Entities.Players;
+using MegaCrit.Sts2.Core.Events.Custom.CrystalSphereEvent;
 using MegaCrit.Sts2.Core.Map;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Models.Cards;
@@ -14,6 +15,7 @@ using MegaCrit.Sts2.Core.Models.Characters;
 using MegaCrit.Sts2.Core.Models.Events;
 using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
+using MegaCrit.Sts2.Core.Nodes.Events.Custom.CrystalSphere;
 using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
 using MegaCrit.Sts2.Core.Nodes.Rewards;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
@@ -117,6 +119,8 @@ internal static class CampaignAcceptance
             var map = NMapScreen.Instance!;
             if (map.IsOpen && map.IsTravelEnabled)
                 await TravelAsync(map, room);
+            else if (NOverlayStack.Instance?.Peek() is NCrystalSphereScreen sphere)
+                await AdvanceSphereAsync(sphere);
             else if (NOverlayStack.Instance?.Peek() is NRewardsScreen rewards)
                 await CollectAsync(rewards, room);
             else if (NOverlayStack.Instance?.Peek() is NCardGridSelectionScreen grid)
@@ -187,6 +191,25 @@ internal static class CampaignAcceptance
                 await OpenMapAsync();
             else throw new InvalidDataException("Unhandled native room " + room.GetType().Name);
             return false;
+        }
+
+        private static async Task AdvanceSphereAsync(NCrystalSphereScreen sphere)
+        {
+            var entity = (CrystalSphereMinigame)AccessTools.Field(typeof(NCrystalSphereScreen), "_entity").GetValue(sphere)!;
+            if (entity.DivinationCount > 0)
+            {
+                var cells = sphere.FindChildren("*", "", true, false).OfType<NCrystalSphereCell>().Where(c => c.Entity.IsHidden);
+                var cell = cells.OrderBy(c => Math.Abs(c.Entity.X - entity.GridSize.X / 2) + Math.Abs(c.Entity.Y - entity.GridSize.Y / 2))
+                    .ThenBy(c => c.Entity.Y).ThenBy(c => c.Entity.X).First();
+                await (Task)AccessTools.Method(typeof(NCrystalSphereScreen), "OnCellClicked").Invoke(sphere, [cell])!;
+                return;
+            }
+            var proceed = (NProceedButton)AccessTools.Field(typeof(NCrystalSphereScreen), "_proceedButton").GetValue(sphere)!;
+            await JourneyAcceptance.Wait(() => NOverlayStack.Instance?.Peek() != sphere || proceed.IsVisibleInTree() && proceed.IsEnabled,
+                "crystal sphere reward settlement");
+            if (NOverlayStack.Instance?.Peek() != sphere) return;
+            AccessTools.Method(typeof(NCrystalSphereScreen), "OnProceedButtonPressed").Invoke(sphere, [proceed]);
+            await JourneyAcceptance.Wait(() => NMapScreen.Instance!.IsOpen || NOverlayStack.Instance?.Peek() != sphere, "leave crystal sphere");
         }
 
         private static IEnumerable<CardModel> CombatCandidates(IEnumerable<CardModel> hand) =>
