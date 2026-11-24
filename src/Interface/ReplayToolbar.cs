@@ -545,6 +545,7 @@ internal sealed class ReplayToolbar
         // At a decision boundary the playback clock can freeze a map fade halfway through.
         // Advance visual tweens while the decision loop remains paused, then restore its clock.
         double scale = Engine.TimeScale;
+        bool paused = tree.Paused;
         var clock = Stopwatch.StartNew();
         try
         {
@@ -568,11 +569,16 @@ internal sealed class ReplayToolbar
                     throw new InvalidDataException(T("此处仍在切换场景。", "The scene is still transitioning."));
                 }
                 image.Dispose();
+                if (paused) tree.Paused = false;
                 if (scale == 0) Engine.TimeScale = 1;
                 await tree.ToSignal(tree.CreateTimer(.1, true, false, true), SceneTreeTimer.SignalName.Timeout);
             }
         }
-        finally { Engine.TimeScale = scale; }
+        finally
+        {
+            tree.Paused = paused;
+            Engine.TimeScale = scale;
+        }
     }
 
     private void Feedback(string text)
