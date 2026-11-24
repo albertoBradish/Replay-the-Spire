@@ -21,13 +21,23 @@ public static class ReplayUi
         if (__instance.HasNode("ReplayTheSpireEntry")) return;
         var menu = __instance;
         var button = Action(T("回放尖塔", "Replay the Spire"), () => Open(menu.GetTree()), true);
+        Typeface(button, 22);
         button.Name = "ReplayTheSpireEntry";
         menu.AddChild(button);
         button.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.CenterBottom);
-        button.OffsetLeft = -100;
-        button.OffsetRight = 100;
+        button.OffsetLeft = -112;
+        button.OffsetRight = 112;
         button.OffsetTop = -66;
         button.OffsetBottom = -26;
+        var display = menu.GetTree().Root;
+        void SizeEntry()
+        {
+            button.Scale = Vector2.One * ReadabilityScale(display);
+            button.PivotOffset = new Vector2(button.Size.X / 2, button.Size.Y);
+        }
+        display.SizeChanged += SizeEntry;
+        button.TreeExiting += () => display.SizeChanged -= SizeEntry;
+        SizeEntry();
         var nativeButtons = menu.GetNodeOrNull<Control>("MainMenuTextButtons");
         if (nativeButtons != null)
         {

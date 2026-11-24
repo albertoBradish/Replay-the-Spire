@@ -11,7 +11,9 @@ internal sealed class ReplayBrowser
     private static string? lastRunId;
     private static int lastRoomIndex;
     private readonly SceneTree tree;
-    internal Window Window { get; } = new() { Name = "ReplayTheSpireLibrary", Title = "Replay the Spire", Borderless = true, Transient = true, Exclusive = true, ProcessMode = Node.ProcessModeEnum.Always };
+    internal Window Window { get; } = new() { Name = "ReplayTheSpireLibrary", Title = "Replay the Spire", Visible = false, Borderless = true, Transient = true, Exclusive = true, ProcessMode = Node.ProcessModeEnum.Always };
+    private readonly PanelContainer backdrop = Panel(Ink, 18);
+    private readonly GridContainer selectors = new() { Columns = 2 };
     private readonly VBoxContainer page = Column(10);
     private readonly VBoxContainer detail = Column(8);
     private readonly OptionButton runs = new() { Name = "RunPicker" };
@@ -48,9 +50,8 @@ internal sealed class ReplayBrowser
             }
         };
 
-        var backdrop = Panel(Ink, 18);
         Window.AddChild(backdrop);
-        backdrop.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+        backdrop.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.TopLeft);
         backdrop.AddChild(page);
         var header = Row();
         page.AddChild(header);
@@ -60,7 +61,6 @@ internal sealed class ReplayBrowser
         header.AddChild(Action(T("导入回放", "Import"), PickFile));
         header.AddChild(Action(T("关闭", "Close"), Close));
 
-        var selectors = new GridContainer { Columns = 2 };
         selectors.AddThemeConstantOverride("h_separation", 12);
         page.AddChild(selectors);
         var runField = Column(2);
@@ -69,7 +69,6 @@ internal sealed class ReplayBrowser
         runField.SizeFlagsStretchRatio = 1.45f;
         selectors.AddChild(runField);
         selectors.AddChild(roomField);
-        Window.SizeChanged += () => selectors.Columns = Window.GetVisibleRect().Size.X < 650 ? 1 : 2;
         runField.AddChild(Text(T("对局", "Run"), 14, true));
         runField.AddChild(runs);
         StyleButton(runs);
@@ -113,14 +112,12 @@ internal sealed class ReplayBrowser
     internal void Show()
     {
         tree.Root.AddChild(Window);
-        Window.ContentScaleMode = Window.ContentScaleModeEnum.CanvasItems;
-        Window.ContentScaleStretch = Window.ContentScaleStretchEnum.Fractional;
-        Window.ContentScaleAspect = Window.ContentScaleAspectEnum.Ignore;
         var size = FitToDisplay();
-        Window.PopupCentered(size);
+        Window.Size = size;
         tree.Root.SizeChanged += Resize;
         Window.TreeExiting += () => tree.Root.SizeChanged -= Resize;
         Reload(initialRun, initialRoom);
+        Window.PopupCentered(size);
         runs.GrabFocus();
     }
 
@@ -129,7 +126,13 @@ internal sealed class ReplayBrowser
         var parent = tree.Root;
         float factor = Window.IsEmbedded() ? ReadabilityScale(parent) : 1;
         var baseSize = new Vector2I(Math.Clamp(parent.Size.X - 32, 280, 1030), Math.Clamp(parent.Size.Y - 68, 300, 760));
-        Window.ContentScaleSize = baseSize;
+        // Embedded Windows inherit the game's canvas stretch. Give the actual
+        // panel its design size and scale its children together with the panel.
+        // A second content stretcher on the Window leaves empty space on HiDPI.
+        selectors.Columns = baseSize.X < 650 ? 1 : 2;
+        backdrop.Position = Vector2.Zero;
+        backdrop.Size = baseSize;
+        backdrop.Scale = Vector2.One * factor;
         return new Vector2I(Mathf.RoundToInt(baseSize.X * factor), Mathf.RoundToInt(baseSize.Y * factor));
     }
 
