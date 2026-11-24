@@ -90,9 +90,12 @@ internal static class RewardDamageAcceptance
             await CardPileCmd.RemoveFromDeck(player.Deck.Cards.ToArray(), false);
             await CardPileCmd.Add(run.CreateCard(ModelDb.Card<TwinStrike>(), player), PileType.Deck);
         }
-        var monsters = run.Map.GetAllMapPoints().Where(p => p.PointType == MapPointType.Monster);
-        var map = twin ? monsters.OrderBy(p => p.coord.row).ThenBy(p => p.coord.col).First() :
-            monsters.Single(p => p.coord.col == 3 && p.coord.row == 0);
+        // The player's first combat is the start node. GetAllMapPoints enumerates the paths
+        // after it. Read the generated map so coordinate layout changes don't affect this case.
+        var map = run.Map.StartingMapPoint;
+        if (twin || map.PointType != MapPointType.Monster)
+            map = run.Map.GetAllMapPoints().Where(p => p.PointType == MapPointType.Monster)
+                .OrderBy(p => p.coord.row).ThenBy(p => p.coord.col).First();
         await RunManager.Instance.EnterMapCoord(map.coord);
         await Wait(() => HasHand(player), "damage fixture opening hand");
         return (player, player.Creature.CombatState!.HittableEnemies.Single());
