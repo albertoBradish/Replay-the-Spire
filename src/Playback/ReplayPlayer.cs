@@ -125,7 +125,17 @@ public static class ReplayPlayer
                         oldSave.Acts[oldSave.CurrentActIndex].Id == nextSave.Acts[nextSave.CurrentActIndex].Id;
                     directSwitch = true;
                     previous.Cancel();
-                    RunManager.Instance.CleanUp(graceful: false);
+                    // Card visuals can still have deferred pool returns after the logic
+                    // reaches a decision. Let the old room finish before opening another.
+                    var tree = game.GetTree();
+                    double scale = Engine.TimeScale;
+                    try
+                    {
+                        Engine.TimeScale = 4;
+                        await game.ToSignal(tree.CreateTimer(.65, true, false), SceneTreeTimer.SignalName.Timeout);
+                    }
+                    finally { Engine.TimeScale = scale; }
+                    RunManager.Instance.CleanUp();
                     // Detach the old run's nodes before the new singletons are attached.
                     game.RootSceneContainer.SetCurrentScene(new Control());
                     await game.ToSignal(game.GetTree(), SceneTree.SignalName.ProcessFrame);
