@@ -15,6 +15,7 @@ using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
 using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
 using MegaCrit.Sts2.Core.Nodes.Screens.Overlays;
+using MegaCrit.Sts2.Core.Nodes.Vfx.Cards;
 using MegaCrit.Sts2.Core.Rooms;
 using MegaCrit.Sts2.Core.Runs;
 using MegaCrit.Sts2.Core.Saves;
@@ -96,8 +97,20 @@ internal static class EventGridAcceptance
         var removed = deckOptions.Single(c => ReferenceEquals(c, chosen));
         int deckIndex = player.Deck.Cards.ToList().IndexOf(removed);
         before = Deck(player);
-        await ClickAsync(Screen!, removed);
-        if (!await paying || player.Deck.Cards.Contains(removed)) throw new InvalidDataException("Card removal failed.");
+        var tree = game.GetTree();
+        bool removalFinished = false;
+        void OnNodeAdded(Node node)
+        {
+            if (node is NCardRemoveVfx) node.TreeExiting += () => removalFinished = true;
+        }
+        tree.NodeAdded += OnNodeAdded;
+        try
+        {
+            await ClickAsync(Screen!, removed);
+            if (!await paying || player.Deck.Cards.Contains(removed)) throw new InvalidDataException("Card removal failed.");
+            await JourneyAcceptance.Wait(() => removalFinished, "original card removal animation completed");
+        }
+        finally { tree.NodeAdded -= OnNodeAdded; }
         after = Deck(player);
         if (!after.SequenceEqual(before.Where((_, i) => i != deckIndex)))
             throw new InvalidDataException("Merchant removed a different card.");
