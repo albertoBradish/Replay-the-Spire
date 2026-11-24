@@ -1,0 +1,14 @@
+{
+  "id": "ReplayHarness",
+  "pck_name": "ReplayHarness",
+  "name": "Replay the Spire native integration tests",
+  "author": "albertoBradish",
+  "description": "Isolated native acceptance harness",
+  "version": "0.1.0",
+  "has_pck": false,
+  "has_dll": true,
+  "affects_gameplay": false,
+  "dependencies": [
+    {"id":"SpireReplay","min_version":"0.1.0"}
+  ]
+}

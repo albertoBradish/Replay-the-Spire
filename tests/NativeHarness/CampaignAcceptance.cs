@@ -1,0 +1,313 @@
+using System.IO.Compression;
+using System.Text.Json;
+using Godot;
+using HarmonyLib;
+using MegaCrit.Sts2.Core.Combat;
+using MegaCrit.Sts2.Core.Commands;
+using MegaCrit.Sts2.Core.Entities.Cards;
+using MegaCrit.Sts2.Core.Entities.Players;
+using MegaCrit.Sts2.Core.Map;
+using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.Models.Cards;
+using MegaCrit.Sts2.Core.Models.Characters;
+using MegaCrit.Sts2.Core.Models.Events;
+using MegaCrit.Sts2.Core.Nodes;
+using MegaCrit.Sts2.Core.Nodes.Rewards;
+using MegaCrit.Sts2.Core.Nodes.Rooms;
+using MegaCrit.Sts2.Core.Nodes.Screens;
+using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
+using MegaCrit.Sts2.Core.Nodes.Screens.Map;
+using MegaCrit.Sts2.Core.Nodes.Screens.Overlays;
+using MegaCrit.Sts2.Core.Rewards;
+using MegaCrit.Sts2.Core.Rooms;
+using MegaCrit.Sts2.Core.Runs;
+using MegaCrit.Sts2.Core.Saves;
+using SpireReplay;
+using SpireReplay.Playback;
+
+namespace ReplayHarness;
+
+internal static class CampaignAcceptance
+{
+    private const string Seed = "CAMPAIGNREPLAY";
+    private const string Setup = "Ironclad, 1,000 maximum/current HP, six The Scythe at 999 damage (986 permanent growth), six Clash. Set once before the first map choice.";
+    private static string Report(string name) => Path.Combine(
+        System.Environment.GetEnvironmentVariable("SPIRE_REPLAY_TEST")!, "campaign-" + name + ".json");
+    private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
+
+    internal static async Task RecordAsync(NGame game)
+    {
+        double speed = Engine.TimeScale;
+        var visits = new List<Visit>();
+        try
+        {
+            Engine.TimeScale = 6;
+            SaveManager.Instance.Progress.EnableFtues = false;
+            var hero = ModelDb.Character<Ironclad>();
+#if BETA
+            var avatar = Player.CreateForNewRun(hero, SaveManager.Instance.GenerateUnlockStateFromProgress(), 1);
+            var run = await game.StartNewSingleplayerRun(avatar, true, ActModel.GetDefaultList(), [], Seed, GameMode.Standard, false);
+#else
+            var run = await game.StartNewSingleplayerRun(hero, true, ActModel.GetDefaultList(), [], Seed, GameMode.Standard);
+#endif
+            var player = run.Players.Single();
+            await CreatureCmd.SetMaxHp(player.Creature, 1000);
+            await CreatureCmd.SetCurrentHp(player.Creature, 1000);
+            await CardPileCmd.RemoveFromDeck(player.Deck.Cards.ToArray(), false);
+            for (int i = 0; i < 6; i++)
+            {
+                var scythe = (TheScythe)run.CreateCard(ModelDb.Card<TheScythe>(), player);
+                scythe.IncreasedDamage = 986;
+                scythe.CurrentDamage = 999;
+                await CardPileCmd.Add(scythe, PileType.Deck);
+                await CardPileCmd.Add(run.CreateCard(ModelDb.Card<Clash>(), player), PileType.Deck);
+            }
+            var driver = new CampaignDriver(run, player);
+            AbstractRoom? previous = null;
+            RunInfo? victory = null;
+            int moves = 0;
+            for (; moves < 650 && victory == null; moves++)
+            {
+                await JourneyAcceptance.Wait(() => run.CurrentRoom != null, "campaign room entry");
+                var room = run.CurrentRoom!;
+                if (!ReferenceEquals(room, previous))
+                {
+                    visits.Add(new Visit(run.CurrentActIndex + 1, run.TotalFloor, room.RoomType.ToString(), room.ModelId?.ToString()));
+                    GD.Print($"[ReplayHarness] campaign act {run.CurrentActIndex + 1}, floor {run.TotalFloor}, {room.RoomType} {room.ModelId}");
+                    previous = room;
+                }
+                if (await driver.VisitAsync(room))
+                {
+                    await JourneyAcceptance.Wait(() => (victory = ReplayStore.ListRuns().FirstOrDefault(r =>
+                        r.Seed == Seed && r.Result == "胜利")) != null, "canonical victory recorded");
+                }
+                else if (player.Creature.IsDead)
+                    throw new InvalidDataException("Defeated before the final boss.");
+            }
+            if (victory == null)
+                throw new InvalidDataException($"No victory after {moves} UI actions; act {run.CurrentActIndex + 1}, floor {run.TotalFloor}, {run.CurrentRoom?.ModelId}, overlay {NOverlayStack.Instance?.Peek()?.GetType().Name}.");
+            if (visits.Select(v => v.Act).Distinct().Count() != run.Acts.Count)
+                throw new InvalidDataException($"Native victory reached with only {visits.Select(v => v.Act).Distinct().Count()}/{run.Acts.Count} acts.");
+            string archive = Path.Combine(ReplayStore.ExportsDirectory, victory.Id + ".spireplay");
+            await JourneyAcceptance.Wait(() => File.Exists(archive), "campaign portable archive");
+            using var zip = ZipFile.OpenRead(archive);
+            var witness = new Campaign(victory.Id, victory.Result, Setup, visits, victory.Rooms.Count,
+                zip.Entries.Sum(e => e.Length), new FileInfo(archive).Length, zip.Entries.Count,
+                victory.Rooms.Count(r => r.HasCombat), victory.Rooms.Count(r => r.HasCheckpoint));
+            File.WriteAllText(Report("witness"), JsonSerializer.Serialize(witness, Json));
+            GD.Print("REPLAY_CAMPAIGN_RECORD_PASS");
+        }
+        catch
+        {
+            File.WriteAllText(Report("partial-route"), JsonSerializer.Serialize(visits, Json));
+            throw;
+        }
+        finally { Engine.TimeScale = speed; }
+    }
+
+    private sealed class CampaignDriver(RunState run, Player player)
+    {
+        private bool keptCard;
+
+        internal async Task<bool> VisitAsync(AbstractRoom room)
+        {
+            var map = NMapScreen.Instance!;
+            if (map.IsOpen && map.IsTravelEnabled)
+                await TravelAsync(map, room);
+            else if (NOverlayStack.Instance?.Peek() is NRewardsScreen rewards)
+                await CollectAsync(rewards, room);
+            else if (NOverlayStack.Instance?.Peek() is NCardGridSelectionScreen grid)
+                await SelectGridAsync(grid);
+            else if (room is CombatRoom)
+            {
+                if (CombatManager.Instance.IsInProgress)
+                    await JourneyAcceptance.WinFightAsync(player);
+                await JourneyAcceptance.Wait(() => NOverlayStack.Instance?.Peek() is NRewardsScreen ||
+                    NMapScreen.Instance!.IsOpen || run.CurrentRoom != room || CombatManager.Instance.IsInProgress,
+                    "post-combat reward or map");
+            }
+            else if (room is EventRoom ev)
+                return await ChooseEventAsync(ev);
+            else if (room is RestSiteRoom camp)
+            {
+                int heal = camp.Options.ToList().FindIndex(o => o.IsEnabled && o.OptionId == "HEAL");
+                if (heal >= 0)
+                {
+                    var rest = camp.Options[heal];
+                    var native = NRestSiteRoom.Instance!;
+                    await JourneyAcceptance.Wait(() => native.GetButtonForOption(rest) != null, "camp buttons");
+                    var button = native.GetButtonForOption(rest)!;
+                    await (Task)AccessTools.Method(button.GetType(), "SelectOption").Invoke(button, [rest])!;
+                }
+                await OpenMapAsync();
+            }
+            else if (room is TreasureRoom)
+            {
+                var chest = NRun.Instance!.TreasureRoom!;
+                if (!map.IsTravelEnabled)
+                {
+                    var open = (Task)AccessTools.Method(typeof(NTreasureRoom), "OpenChest").Invoke(chest, null)!;
+                    var picking = RunManager.Instance.TreasureRoomRelicSynchronizer;
+                    await JourneyAcceptance.Wait(() => picking.CurrentRelics is {Count: > 0} &&
+                        AccessTools.Field(typeof(NTreasureRoom), "_isRelicCollectionOpen").GetValue(chest) is true,
+                        "campaign treasure");
+                    // The single-player skip button opens the map. The chest task
+                    // only finishes when the player chooses a relic or leaves the room.
+                    AccessTools.Method(typeof(NTreasureRoom), "OnProceedButtonPressed").Invoke(chest, [null]);
+                    _ = open.ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
+                }
+                if (!map.IsOpen && NOverlayStack.Instance?.Peek() is not NRewardsScreen) await OpenMapAsync();
+            }
+            else if (room is MapRoom or MerchantRoom)
+                await OpenMapAsync();
+            else throw new InvalidDataException("Unhandled native room " + room.GetType().Name);
+            return false;
+        }
+
+        private static async Task OpenMapAsync()
+        {
+            var map = NMapScreen.Instance!;
+            await JourneyAcceptance.Wait(() => map.IsTravelEnabled, "native map travel enabled");
+            map.Open();
+        }
+
+        private async Task TravelAsync(NMapScreen map, AbstractRoom from)
+        {
+            NMapPoint[] choices = [];
+            await JourneyAcceptance.Wait(() => !map.IsTraveling && (choices = map.FindChildren("*", "", true, false)
+                .OfType<NMapPoint>().Where(n => n.State == MapPointState.Travelable).ToArray()).Length > 0, "connected map nodes");
+            var node = choices.OrderBy(n => n.Point.PointType switch
+            {
+                MapPointType.Monster => 0,
+                MapPointType.RestSite => 1,
+                MapPointType.Shop => 2,
+                MapPointType.Elite => 3,
+                MapPointType.Unknown => 5,
+                _ => 4
+            }).ThenBy(n => n.Point.coord.col).First();
+            map.OnMapPointSelectedLocally(node);
+            await JourneyAcceptance.Wait(() => run.CurrentRoom != null && run.CurrentRoom != from && !map.IsTraveling,
+                "native map transition");
+        }
+
+        private async Task CollectAsync(NRewardsScreen screen, AbstractRoom from)
+        {
+            var options = screen.FindChildren("*", "", true, false).OfType<NRewardButton>()
+                .Where(b => b.IsEnabled && b.Reward is {SuccessfullySelected: false}).ToList();
+            var gold = options.FirstOrDefault(b => b.Reward is GoldReward);
+            if (gold != null) await PressReward(gold);
+            var card = options.FirstOrDefault(b => b.Reward is CardReward);
+            if (!keptCard && card?.Reward is CardReward offer)
+            {
+                var selecting = PressReward(card);
+                await JourneyAcceptance.Wait(() => NOverlayStack.Instance!.Peek() is NCardRewardSelectionScreen, "campaign card reward");
+                var picker = (NCardRewardSelectionScreen)NOverlayStack.Instance!.Peek()!;
+                var pick = offer.Cards.FirstOrDefault(c => c.Type == CardType.Attack) ?? offer.Cards.First();
+                AccessTools.Method(picker.GetType(), "SelectCard").Invoke(picker, [picker.GetCardHolder(pick)]);
+                await selecting;
+                keptCard = true;
+            }
+            AccessTools.Method(screen.GetType(), "OnProceedButtonPressed").Invoke(screen, [null]);
+            await JourneyAcceptance.Wait(() => NMapScreen.Instance!.IsOpen || run.CurrentRoom != from ||
+                NOverlayStack.Instance!.Peek() != screen, "campaign rewards proceed");
+        }
+
+        private static Task PressReward(NRewardButton button) =>
+            (Task)AccessTools.Method(typeof(NRewardButton), "GetReward").Invoke(button, null)!;
+
+        private async Task<bool> ChooseEventAsync(EventRoom room)
+        {
+            // Act changes push the Architect model before its assets and event
+            // scene are initialized. Wait for the same event that a player sees.
+            await JourneyAcceptance.Wait(() => NEventRoom.Instance is { } view &&
+                AccessTools.Field(typeof(NEventRoom), "_event").GetValue(view) is EventModel showing &&
+                showing.Id == room.ModelId, "native event scene " + room.ModelId);
+            var model = room.LocalMutableEvent;
+            if (model.IsFinished && model is not TheArchitect)
+            {
+                await NEventRoom.Proceed();
+                return false;
+            }
+            await JourneyAcceptance.Wait(() => model.CurrentOptions.Any(o => !o.IsLocked), "clickable event choice " + model.Id);
+            var choices = model.CurrentOptions;
+            int selected = Enumerable.Range(0, choices.Count).Where(i => !choices[i].IsLocked)
+                .OrderBy(i => choices[i].IsProceed || choices[i].TextKey.Contains("LEAVE", StringComparison.OrdinalIgnoreCase) ? 0 :
+                    choices[i].Relic != null ? 1 : 2).First();
+            var chosen = choices[selected];
+            bool ending = model is TheArchitect && chosen.TextKey == "PROCEED";
+            NEventRoom.Instance!.OptionButtonClicked(chosen, selected);
+            if (ending) return true;
+            await JourneyAcceptance.Wait(() => run.CurrentRoom != room || model.IsFinished || !model.CurrentOptions.Contains(chosen) ||
+                NOverlayStack.Instance?.Peek() != null || NMapScreen.Instance!.IsOpen, "event response " + chosen.TextKey);
+            return false;
+        }
+
+        private static async Task SelectGridAsync(NCardGridSelectionScreen grid)
+        {
+            var options = (IReadOnlyList<CardModel>)AccessTools.Field(typeof(NCardGridSelectionScreen), "_cards").GetValue(grid)!;
+            if (options.Count == 0) throw new InvalidDataException("No card on event selection grid.");
+            var prefs = AccessTools.Field(grid.GetType(), "_prefs").GetValue(grid)!;
+            int count = (int)(AccessTools.Property(prefs.GetType(), "MinSelect")?.GetValue(prefs) ??
+                AccessTools.Field(prefs.GetType(), "MinSelect").GetValue(prefs))!;
+            var click = AccessTools.Method(grid.GetType(), "OnCardClicked");
+            foreach (var selected in options.OrderBy(c => c is TheScythe).Take(Math.Max(1, count)))
+                click.Invoke(grid, [selected]);
+            var confirm = AccessTools.Method(grid.GetType(), "ConfirmSelection");
+            confirm.Invoke(grid, [null]);
+            if (ReferenceEquals(NOverlayStack.Instance?.Peek(), grid))
+                AccessTools.Method(grid.GetType(), "CompleteSelection")?.Invoke(grid, [null]);
+            await JourneyAcceptance.Wait(() => NOverlayStack.Instance?.Peek() != grid, "event grid selection confirmed");
+        }
+    }
+
+    internal static async Task WatchAsync()
+    {
+        var witness = JsonSerializer.Deserialize<Campaign>(File.ReadAllText(Report("witness")))!;
+        var record = ReplayStore.ListRuns().Single(r => r.Id == witness.Run);
+        if (record.Result != witness.Result || record.Rooms.Count != witness.Rooms)
+            throw new InvalidDataException("Campaign index differs from the completed run.");
+        var results = new List<Coverage>();
+        foreach (var room in record.Rooms)
+        {
+            var data = ReplayStore.LoadRoom(record.Id, room.Index);
+            string mode = data.Combat != null ? "combat" : data.Checkpoint != null ? "room" : "journal";
+            bool finale = data.Events.Any(e => e.Kind == "direct-event");
+            try
+            {
+                if (data.Combat != null)
+                    await ReplayPlayer.PlayAsync(data.Combat, 0, data.Events);
+                else if (data.Checkpoint != null)
+                    await ReplayPlayer.PlayRoomAsync(data.Checkpoint, data.Events);
+                if (mode != "journal")
+                {
+                    ReplayPlayer.SetSpeed(8);
+                    await JourneyAcceptance.Wait(() => ReplayPlayer.IsFinished, "campaign room playback " + room.Index, 105);
+                }
+                bool passed = mode != "journal" && !ReplayPlayer.HasError && (mode != "combat" || ReplayPlayer.IsVerified) &&
+                    (!finale || ReplayPlayer.NativeVictory);
+                results.Add(new Coverage(room.Index, room.Floor, room.Name, mode, data.Events.Count, passed, DateTimeOffset.UtcNow,
+                    ReplayPlayer.NativeChoiceCount, ReplayPlayer.CaptionChoiceCount, ReplayPlayer.NativeVictory,
+                    mode == "journal" ? "No native room checkpoint" : ReplayPlayer.Status));
+            }
+            catch (Exception error)
+            {
+                results.Add(new Coverage(room.Index, room.Floor, room.Name, mode, data.Events.Count, false, DateTimeOffset.UtcNow,
+                    ReplayPlayer.NativeChoiceCount, ReplayPlayer.CaptionChoiceCount, ReplayPlayer.NativeVictory, error.Message));
+            }
+            finally
+            {
+                if (ReplayPlayer.IsActive) await ReplayPlayer.StopAsync();
+                File.WriteAllText(Report("coverage"), JsonSerializer.Serialize(results, Json));
+            }
+        }
+        if (results.Any(r => r.Mode != "journal" && !r.Passed) || results.Count(r => r.Mode == "combat") != witness.Combats)
+            throw new InvalidDataException("See campaign-coverage.json for divergent rooms.");
+        GD.Print("REPLAY_CAMPAIGN_WATCH_PASS");
+    }
+
+    private sealed record Visit(int Act, int Floor, string Type, string? Model);
+    private sealed record Campaign(string Run, string Result, string Setup, List<Visit> Visits, int Rooms,
+        long RawBytes, long ArchiveBytes, int Entries, int Combats, int Checkpoints);
+    private sealed record Coverage(int Index, int Floor, string Name, string Mode, int Events, bool Passed, DateTimeOffset CompletedUtc,
+        int NativeChoices, int CaptionOnlyChoices, bool NativeVictory, string Detail);
+}

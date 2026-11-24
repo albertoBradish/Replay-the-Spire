@@ -1,0 +1,12 @@
+{
+  "id": "ReplayPerf",
+  "pck_name": "ReplayPerf",
+  "name": "Replay the Spire performance probe",
+  "author": "albertoBradish",
+  "description": "Isolated A/B recording benchmark",
+  "version": "0.1.0",
+  "has_pck": false,
+  "has_dll": true,
+  "affects_gameplay": false,
+  "dependencies": []
+}
