@@ -7,6 +7,33 @@ if (!OperatingSystem.IsWindows())
     return;
 }
 
+if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 19041))
+{
+    AudioInterfaces.CheckProcessLoopbackActivation(0);
+    foreach (uint code in new uint[] { 0x80004001, 0x80004002, 0x80070032, 0x80070490, 0x80070005, 0x80070057 })
+    {
+        try { AudioInterfaces.CheckProcessLoopbackActivation(unchecked((int)code)); }
+        catch (Exception error) when ((uint)error.HResult == code &&
+            error.Message.Contains("游戏进程音轨接口") == (code is not (0x80070005 or 0x80070057))) { continue; }
+        throw new InvalidDataException($"Process audio activation lost error 0x{code:X8}.");
+    }
+}
+
+// Optional live activation check for Windows 10 machines. Requires no game or audible test output.
+if (args.Contains("--probe-audio"))
+{
+    for (int attempt = 1; attempt <= 2; attempt++)
+    {
+        long bytes = 0;
+        using var capture = GameAudioCapture.Start((_, _, size) => bytes += size);
+        await Task.Delay(300);
+        capture.Stop(14400);
+        if (bytes < 14400 * 4 || bytes != capture.FramesWritten * 4)
+            throw new InvalidDataException("Unexpected 48 kHz stereo PCM length.");
+        Console.WriteLine($"Windows {Environment.OSVersion.Version} process audio activation {attempt}: {bytes} PCM bytes.");
+    }
+}
+
 using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(15));
 var token = limit.Token;
 static NamedPipeClientStream Client(PcmPipe pipe) => new(".", pipe.InputPath.Split('\\').Last(),

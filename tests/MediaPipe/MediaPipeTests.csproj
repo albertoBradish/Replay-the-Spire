@@ -6,6 +6,8 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../../src/Media/AudioInterfaces.cs" Link="AudioInterfaces.cs" />
+    <Compile Include="../../src/Media/GameAudioCapture.cs" Link="GameAudioCapture.cs" />
     <Compile Include="../../src/Media/PcmPipe.cs" Link="PcmPipe.cs" />
   </ItemGroup>
 </Project>

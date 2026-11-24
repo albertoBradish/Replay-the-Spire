@@ -3,7 +3,7 @@ using System.Runtime.Versioning;
 
 namespace SpireReplay.Media;
 
-[SupportedOSPlatform("windows10.0.20348")]
+[SupportedOSPlatform("windows10.0.19041")]
 internal static class AudioInterfaces
 {
     [StructLayout(LayoutKind.Sequential, Pack = 2)]
@@ -48,8 +48,8 @@ internal static class AudioInterfaces
         {
             try
             {
-                Marshal.ThrowExceptionForHR(operation.GetActivateResult(out var result, out var instance));
-                Marshal.ThrowExceptionForHR(result);
+                Marshal.ThrowExceptionForHR(operation.GetActivateResult(out var result, out var instance), new IntPtr(-1));
+                CheckProcessLoopbackActivation(result);
                 Result.TrySetResult(instance);
             }
             catch (Exception e) { Result.TrySetException(e); }
@@ -70,7 +70,7 @@ internal static class AudioInterfaces
             var handler = new Handler();
             var iid = typeof(IAudioClient).GUID;
             var hr = ActivateAudioInterfaceAsync("VAD\\Process_Loopback", in iid, ref variant, handler, out operation);
-            Marshal.ThrowExceptionForHR(hr);
+            CheckProcessLoopbackActivation(hr);
             var result = handler.Result.Task.WaitAsync(TimeSpan.FromSeconds(12)).GetAwaiter().GetResult();
             GC.KeepAlive(handler);
             return (IAudioClient)result;
@@ -80,6 +80,14 @@ internal static class AudioInterfaces
             if (operation != null) Marshal.ReleaseComObject(operation);
             Marshal.FreeCoTaskMem(data);
         }
+    }
+
+    internal static void CheckProcessLoopbackActivation(int hr)
+    {
+        // These errors concern the virtual process device, before a stream format or endpoint is opened.
+        if ((uint)hr is 0x80004001 or 0x80004002 or 0x80070032 or 0x80070490)
+            throw new COMException($"Windows 未提供游戏进程音轨接口（0x{hr:X8}）。请安装 Windows 累积更新后重试，或在 Windows 11 上导出视频。", hr);
+        Marshal.ThrowExceptionForHR(hr, new IntPtr(-1));
     }
 
     [ComImport, Guid("1CB9AD4C-DBFA-4C32-B178-C2F568A703B2"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]

@@ -26,7 +26,7 @@ public sealed class GameAudioCapture : IDisposable
     private Exception? failure;
     private bool disposed;
 
-    [SupportedOSPlatform("windows10.0.20348")]
+    [SupportedOSPlatform("windows10.0.19041")]
     private GameAudioCapture(string? path, Action<byte[], int, int>? output, Action<Exception>? onFailure)
     {
         this.path = path;
@@ -42,8 +42,8 @@ public sealed class GameAudioCapture : IDisposable
 
     private static GameAudioCapture Start(string? path, Action<byte[], int, int>? output, Action<Exception>? onFailure)
     {
-        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 20348) || !Environment.Is64BitProcess)
-            throw new PlatformNotSupportedException("游戏音轨导出需要 Windows 10 build 20348 或更高版本的 64 位系统。");
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 19041) || !Environment.Is64BitProcess)
+            throw new PlatformNotSupportedException("请在 64 位 Windows 10 2004（build 19041）或更高版本上导出游戏音轨。");
         var capture = new GameAudioCapture(path, output, onFailure);
         capture.worker.SetApartmentState(ApartmentState.MTA);
         capture.worker.Start();
@@ -79,7 +79,7 @@ public sealed class GameAudioCapture : IDisposable
 
     public void Dispose() => Stop();
 
-    [SupportedOSPlatform("windows10.0.20348")]
+    [SupportedOSPlatform("windows10.0.19041")]
     private void Record()
     {
         AudioInterfaces.IAudioClient? client = null;
@@ -151,7 +151,7 @@ public sealed class GameAudioCapture : IDisposable
         }
     }
 
-    [SupportedOSPlatform("windows10.0.20348")]
+    [SupportedOSPlatform("windows10.0.19041")]
     private void Drain(AudioInterfaces.ICaptureClient packets, FileStream? wave, byte[] scratch, byte[] silence, bool stopping)
     {
         ulong epoch = (ulong)(StartedTimestamp / (double)Stopwatch.Frequency * 10_000_000);
