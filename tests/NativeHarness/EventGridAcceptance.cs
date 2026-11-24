@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Godot;
 using HarmonyLib;
+using MegaCrit.Sts2.Core.CardSelection;
 using MegaCrit.Sts2.Core.Entities.Merchant;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Map;
@@ -114,11 +115,15 @@ internal static class EventGridAcceptance
     private static async Task ClickAsync(NCardGridSelectionScreen screen, CardModel card)
     {
         var result = screen.CardsSelected();
+        var prefs = (CardSelectorPrefs)AccessTools.Field(screen.GetType(), "_prefs").GetValue(screen)!;
         AccessTools.Method(screen.GetType(), "OnCardClicked").Invoke(screen, [card]);
-        if (!result.IsCompleted)
+        if (screen is not NSimpleCardSelectScreen || prefs.RequireManualConfirmation)
         {
-            var confirm = screen.FindChildren("*", "", true, false).OfType<NConfirmButton>().First(b => b.IsVisibleInTree() && b.IsEnabled);
-            confirm.EmitSignal(NClickableControl.SignalName.Released, confirm);
+            NConfirmButton? confirm = null;
+            await JourneyAcceptance.Wait(() => result.IsCompleted || Screen == screen &&
+                (confirm = screen.FindChildren("*", "", true, false).OfType<NConfirmButton>()
+                    .FirstOrDefault(b => b.IsVisibleInTree() && b.IsEnabled)) != null, "original grid confirmation button");
+            if (!result.IsCompleted) confirm!.EmitSignal(NClickableControl.SignalName.Released, confirm);
         }
         await JourneyAcceptance.Wait(() => result.IsCompleted && Screen != screen, "original grid accepted selection");
         if (!(await result).SequenceEqual([card])) throw new InvalidDataException("Original selector returned a different card.");

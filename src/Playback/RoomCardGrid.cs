@@ -36,7 +36,7 @@ internal static class RoomCardGrid
         __state = opening.Value;
         if (RoomChoiceAnswers.Current is not { } scope || !scope.Pending.TryPeek(out var answer)) return;
         var expected = __originalMethod.Name == nameof(CardSelectCmd.FromDeckGeneric) ? "deck:" : "index:";
-        opening.Value = answer.Key.StartsWith(expected, StringComparison.Ordinal);
+        opening.Value = answer.Key.StartsWith(expected, StringComparison.Ordinal) && answer.Key.Length > expected.Length;
     }
 
     private static void End(bool __state)
@@ -88,15 +88,22 @@ internal static class RoomCardGrid
             click.Invoke(screen, [card]);
         }
         var pressed = new HashSet<NConfirmButton>();
-        while (!completion.IsCompleted && pressed.Count < 2)
+        bool autoConfirm = screen is NSimpleCardSelectScreen && !prefs.RequireManualConfirmation && chosen.Length == prefs.MaxSelect;
+        while (!autoConfirm && !completion.IsCompleted && pressed.Count < 2 &&
+            GodotObject.IsInstanceValid(screen) && screen.IsInsideTree())
         {
             var button = screen.FindChildren("*", "", true, false).OfType<NConfirmButton>()
                 .FirstOrDefault(b => !pressed.Contains(b) && b.IsVisibleInTree() && b.IsEnabled);
-            if (button == null) break;
+            if (button == null)
+            {
+                await tree.ToSignal(tree, SceneTree.SignalName.ProcessFrame);
+                continue;
+            }
             pressed.Add(button);
             button.EmitSignal(NClickableControl.SignalName.Released, button);
         }
-        if (!completion.IsCompleted) throw new InvalidDataException("选牌未能确认。");
+        // The native completion source is signalled during the click, but CardsSelected()
+        // can resume on the following Godot frame after the overlay has already closed.
         var result = (await completion).ToArray();
         if (result.Length != chosen.Length || !result.ToHashSet().SetEquals(chosen))
             throw new InvalidDataException("选中的卡牌与记录不同。");
