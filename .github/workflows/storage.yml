@@ -9,6 +9,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check commit subjects
+        env:
+          BASE_COMMIT: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: python scripts/check-commits.py HEAD --base "$BASE_COMMIT"
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '9.0.x'
