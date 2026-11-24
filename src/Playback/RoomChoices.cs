@@ -6,6 +6,10 @@ using MegaCrit.Sts2.Core.Map;
 using MegaCrit.Sts2.Core.Models.Events;
 using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
+using MegaCrit.Sts2.Core.Nodes.Events.Custom;
+using MegaCrit.Sts2.Core.Nodes.Screens;
+using MegaCrit.Sts2.Core.Nodes.Screens.Overlays;
+using MegaCrit.Sts2.Core.Nodes.CommonUi;
 using MegaCrit.Sts2.Core.Nodes.Screens.Map;
 using MegaCrit.Sts2.Core.Rooms;
 using MegaCrit.Sts2.Core.Runs;
@@ -20,6 +24,7 @@ internal sealed class RoomChoices(RunState run, IReadOnlyList<ReplayEvent> timel
     private readonly RewardChoices rewards = new();
     private readonly HashSet<int> appliedMarkers = [];
     private CrystalSpherePlayback? crystal;
+    private Task? eventWithRewards;
 
     internal Task<bool> ApplyAsync(int index)
     {
@@ -37,7 +42,7 @@ internal sealed class RoomChoices(RunState run, IReadOnlyList<ReplayEvent> timel
         if (entry.Kind == "event-resume")
             return ResumeAsync(entry.ActionKey);
         if (entry.Kind == "reward")
-            return rewards.ApplyAsync(entry, index + 1 < timeline.Count ? timeline[index + 1] : null);
+            return ApplyRewardAsync(entry, index + 1 < timeline.Count ? timeline[index + 1] : null);
         if (entry.Kind == "map" && NMapScreen.Instance is { } map)
         {
             string[] coordinate = entry.ActionKey.Split(',');
@@ -79,6 +84,24 @@ internal sealed class RoomChoices(RunState run, IReadOnlyList<ReplayEvent> timel
         else
             while (start > 0 && timeline[start - 1].Kind == "choice") start--;
         return ApplyWithChildrenAsync(index, start, end, markCompleted: false);
+    }
+
+    private async Task<bool> ApplyRewardAsync(ReplayEvent entry, ReplayEvent? next)
+    {
+        if (eventWithRewards != null && entry.ActionKey is "skip-set" or "leave-set" &&
+            NOverlayStack.Instance?.Peek() is NRewardsScreen screen)
+        {
+            screen.Call(NRewardsScreen.MethodName.OnProceedButtonPressed, screen.GetNode<NProceedButton>("ProceedButton"));
+            var pending = eventWithRewards;
+            await wait(() => pending.IsCompleted || RewardChoices.Visible && NOverlayStack.Instance?.Peek() != screen);
+            if (pending.IsCompleted)
+            {
+                await pending;
+                eventWithRewards = null;
+            }
+            return true;
+        }
+        return await rewards.ApplyAsync(entry, next);
     }
 
     private async Task<bool> OpenTreasureAsync(NTreasureRoom chest, int index, string key)
@@ -131,7 +154,14 @@ internal sealed class RoomChoices(RunState run, IReadOnlyList<ReplayEvent> timel
                     NEventRoom.Instance == null)
                     return false;
                 NEventRoom.Instance.OptionButtonClicked(eventOption, option);
-                await RunManager.Instance.EventSynchronizer.AwaitPendingOptionTasks();
+                var pending = RunManager.Instance.EventSynchronizer.AwaitPendingOptionTasks();
+                await wait(() => pending.IsCompleted || RewardChoices.Visible);
+                if (pending.IsCompleted) await pending;
+                else
+                {
+                    eventWithRewards = pending;
+                    _ = pending.ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
+                }
                 return true;
             case ("camp", RestSiteRoom room):
                 if (option >= room.Options.Count || room.Options[option].OptionId != entry.ActionKey ||
@@ -143,13 +173,23 @@ internal sealed class RoomChoices(RunState run, IReadOnlyList<ReplayEvent> timel
                     return false;
                 await applying;
                 return true;
-            case ("shop", MerchantRoom room):
-                NMerchantRoom.Instance?.OpenInventory();
-                // The beta moved the local inventory to MerchantSynchronizer.
-                object owner = AccessTools.Property(typeof(RunManager), "MerchantSynchronizer")
-                    ?.GetValue(RunManager.Instance) ?? room;
-                var inventory = AccessTools.Method(owner.GetType(), "GetLocalInventory")
-                    ?.Invoke(owner, null) as MerchantInventory;
+            case ("shop", MerchantRoom):
+            case ("shop", EventRoom { LocalMutableEvent: FakeMerchant }):
+                MerchantInventory? inventory;
+                if (run.CurrentRoom is MerchantRoom shop)
+                {
+                    NMerchantRoom.Instance?.OpenInventory();
+                    object owner = AccessTools.Property(typeof(RunManager), "MerchantSynchronizer")
+                        ?.GetValue(RunManager.Instance) ?? shop;
+                    inventory = AccessTools.Method(owner.GetType(), "GetLocalInventory")?.Invoke(owner, null) as MerchantInventory;
+                }
+                else
+                {
+                    var vendor = NEventRoom.Instance?.FindChildren("*", "", true, false).OfType<NFakeMerchant>().FirstOrDefault();
+                    if (vendor == null) return false;
+                    vendor.Call(NFakeMerchant.MethodName.OpenInventory);
+                    inventory = vendor.Inventory.Inventory;
+                }
                 if (inventory == null)
                     return false;
                 var item = inventory.AllEntries.ElementAtOrDefault(option);
