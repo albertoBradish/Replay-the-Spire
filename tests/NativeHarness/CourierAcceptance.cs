@@ -67,7 +67,7 @@ internal static class CourierAcceptance
         await JourneyAcceptance.Wait(() => ReplayPlayer.IsFinished, "courier choices complete", 40);
         var run = RunManager.Instance.DebugOnlyGetState()!;
         if (ReplayPlayer.HasError || Potions(run.Players.Single()) != receipt[2] || run.CurrentRoom is not EventRoom room || !room.LocalMutableEvent.IsFinished)
-            throw new InvalidDataException("Courier reward or event result diverged: " + ReplayPlayer.Status);
+            throw new InvalidDataException($"Courier differed: expected {receipt[2]}, got {Potions(run.Players.Single())}; room={run.CurrentRoom?.ModelId}, finished={(run.CurrentRoom as EventRoom)?.LocalMutableEvent.IsFinished}, choices={ReplayPlayer.NativeChoiceCount}, caption={ReplayPlayer.CaptionChoiceCount}, status={ReplayPlayer.Status}");
         await ReplayPlayer.StopAsync();
         GD.Print("REPLAY_COURIER_WATCH_PASS");
     }
