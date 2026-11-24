@@ -40,6 +40,7 @@ internal sealed class DecisionCaption
             "camp" or "camp-open" => T("营地", "Rest site"),
             "event" => T("事件选择", "Event choice"),
             "event-resume" => T("返回事件", "Back to event"),
+            "direct-event" => T("终局", "Finale"),
             "treasure" => T("宝箱", "Treasure"),
             _ => T("选择", "Decision")
         };

@@ -6,6 +6,8 @@ using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Entities.Models;
 using MegaCrit.Sts2.Core.Entities.Multiplayer;
 using MegaCrit.Sts2.Core.GameActions;
+using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.Models.Events;
 using MegaCrit.Sts2.Core.Multiplayer.Game;
 using MegaCrit.Sts2.Core.Multiplayer.Replay;
 using MegaCrit.Sts2.Core.Nodes;
@@ -53,6 +55,9 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
     internal bool Finished { get; private set; }
     internal bool Verified { get; private set; }
     internal bool HasError { get; private set; }
+    internal int NativeChoiceCount { get; private set; }
+    internal int CaptionChoiceCount { get; private set; }
+    internal bool NativeVictory { get; set; }
     internal bool Paused { get; private set; }
     internal bool Seeking => seeking;
     internal int Cursor { get; private set; }
@@ -87,8 +92,19 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
             tracker.LoadReplayChecksums(Replay.checksumData, Replay.nextChecksumId);
             tracker.ChecksumGenerated += Verify;
         }
-        var previousRoom = AbstractRoom.FromSerializable(Replay.serializableRun.PreFinishedRoom, run);
-        await manager.LoadIntoLatestMapCoord(previousRoom);
+        if (RoomEvents?.FirstOrDefault() is { Kind: "direct-event" } ending)
+        {
+            var architect = ModelDb.Event<TheArchitect>();
+            if (ending.ActionKey != architect.Id.ToString() || ending.ActionIndex == null)
+                throw new InvalidDataException("终局事件入口无效。");
+            ReplaySandbox.RestoreEndingHistory(player.Character.Id, ending.Amount, ending.ActionIndex.Value);
+            await manager.EnterRoom(new EventRoom(architect));
+        }
+        else
+        {
+            var previousRoom = AbstractRoom.FromSerializable(Replay.serializableRun.PreFinishedRoom, run);
+            await manager.LoadIntoLatestMapCoord(previousRoom);
+        }
         CheckActive();
         if (run.CurrentRoom is EventRoom)
         {
@@ -344,9 +360,13 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
                 await WaitPresentationAsync(seconds, originalOnly: true);
             if (entry.Kind == "event-resume" && run.CurrentRoom is CombatRoom context && !context.Encounter.ShouldGiveRewards)
                 await Until(() => run.CurrentRoom is EventRoom && NEventRoom.Instance != null);
+            if (entry.Kind == "event" && run.CurrentRoom is EventRoom { CanonicalEvent: TheArchitect } finale)
+                await Until(() => finale.LocalMutableEvent.CurrentOptions.Count > 0);
             var applied = driver.ApplyAsync(i);
             await Until(() => applied.IsCompleted);
             bool animated = await applied;
+            if (animated) NativeChoiceCount++;
+            else CaptionChoiceCount++;
             Status = (animated ? "选择 · " : "记录 · ") + entry.Label;
             caption ??= new DecisionCaption(tree);
             caption.Show(entry, animated);

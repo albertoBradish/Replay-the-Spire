@@ -26,6 +26,9 @@ public static class ReplayPlayer
     public static bool IsSeeking => current?.Seeking ?? false;
     public static bool IsVerified => current?.Verified ?? false;
     public static bool HasError => current?.HasError ?? false;
+    public static int NativeChoiceCount => current?.NativeChoiceCount ?? 0;
+    public static int CaptionChoiceCount => current?.CaptionChoiceCount ?? 0;
+    public static bool NativeVictory => current?.NativeVictory ?? false;
     public static bool CanStep => IsReady && !IsFinished;
     public static int CurrentTurn => current?.Turn ?? 0;
     public static int CurrentEvent => current?.Cursor ?? 0;
@@ -50,6 +53,8 @@ public static class ReplayPlayer
             prefix: new HarmonyMethod(typeof(ReplayPlayer), nameof(Quitting)));
         harmony.Patch(AccessTools.Method(typeof(NEventRoom), "SetupLayout"),
             postfix: new HarmonyMethod(typeof(ReplayPlayer), nameof(EventLayoutStarted)));
+        harmony.Patch(AccessTools.Method(typeof(RunManager), nameof(RunManager.OnEnded)),
+            postfix: new HarmonyMethod(typeof(ReplayPlayer), nameof(Outcome)));
     }
 
     public static Task PlayAsync(byte[] combat, int turn = 0) => PlayAsync(combat, turn, null);
@@ -185,6 +190,11 @@ public static class ReplayPlayer
     }
 
     private static void EventLayoutStarted(Task __result) => current?.RememberEventLayout(__result);
+
+    private static void Outcome(bool isVictory)
+    {
+        if (current != null && isVictory) current.NativeVictory = true;
+    }
 
     private static void WaitForMenuOnExit(ref Task __result)
     {

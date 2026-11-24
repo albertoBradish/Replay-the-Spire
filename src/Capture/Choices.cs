@@ -51,6 +51,7 @@ internal static partial class CaptureHooks
         hook(typeof(RewardsSetSynchronizer), nameof(RewardsSetSynchronizer.SelectLocalReward), nameof(RewardOpened), true);
         hook(typeof(RewardsSetSynchronizer), nameof(RewardsSetSynchronizer.SkipLocalRewardsSet), nameof(RewardsSkipped), true);
         hook(typeof(RunManager), nameof(RunManager.ProceedFromTerminalRewardsScreen), nameof(TerminalRewardsLeft), true);
+        hook(typeof(ActChangeSynchronizer), nameof(ActChangeSynchronizer.SetLocalPlayerReady), nameof(TerminalRewardsLeft), true);
         hook(typeof(NCardRewardSelectionScreen), nameof(NCardRewardSelectionScreen.RefreshOptions), nameof(RewardOptions), false);
         hook(typeof(PlayerChoiceSynchronizer), nameof(PlayerChoiceSynchronizer.SyncLocalChoice), nameof(PlayerChoice), true);
     }

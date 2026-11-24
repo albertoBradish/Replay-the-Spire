@@ -11,6 +11,7 @@ using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.GameActions;
 using MegaCrit.Sts2.Core.GameActions.Multiplayer;
 using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.Models.Events;
 using MegaCrit.Sts2.Core.Multiplayer.Game;
 using MegaCrit.Sts2.Core.Multiplayer.Replay;
 using MegaCrit.Sts2.Core.Multiplayer.Serialization;
@@ -30,6 +31,7 @@ internal static partial class CaptureHooks
     private static bool playableCombat;
     private static bool embeddedCombat;
     private static bool hasRoom;
+    private static int act = -1;
     private static SerializableRun? nextCheckpoint;
     private static readonly AccessTools.FieldRef<CombatReplayWriter, CombatReplay?> CurrentReplay =
         AccessTools.FieldRefAccess<CombatReplayWriter, CombatReplay?>("_replay");
@@ -97,7 +99,8 @@ internal static partial class CaptureHooks
 
     private static void EnteringRoom(AbstractRoom room, bool isRestoringRoomStackBase) => Observe(() =>
     {
-        if (!Recording || isRestoringRoomStackBase || (room is MapRoom && hasRoom)) return;
+        if (!Recording || isRestoringRoomStackBase || (room is MapRoom && hasRoom && act == run!.CurrentActIndex)) return;
+        act = run!.CurrentActIndex;
         roomReady = false;
         combatRoom = room is CombatRoom;
         if (room is CombatRoom { ParentEventId: not null, IsPreFinished: false } nested &&
@@ -126,6 +129,15 @@ internal static partial class CaptureHooks
         };
         ReplayStore.BeginRoom(run!.TotalFloor, title);
         hasRoom = true;
+        if (nextCheckpoint == null && room is MapRoom)
+            nextCheckpoint = RunManager.Instance.ToSave(null);
+        if (nextCheckpoint == null && room is EventRoom { CanonicalEvent: TheArchitect } ending)
+        {
+            nextCheckpoint = RunManager.Instance.ToSave(null);
+            var progress = SaveManager.Instance.Progress;
+            int heroWins = progress.GetStatsForCharacter(run.Players[0].Character.Id)?.TotalWins ?? 0;
+            ReplayStore.Add("direct-event", title, amount: progress.Wins, actionKey: ending.ModelId.ToString(), actionIndex: heroWins);
+        }
         if (combatRoom && !playableCombat && !room.IsPreFinished)
             ReplayStore.Add("event", "事件内战斗");
         if (nextCheckpoint != null)
@@ -201,6 +213,7 @@ internal static partial class CaptureHooks
             CombatManager.Instance.TurnStarted -= NewTurn;
         }
         run = null;
+        act = -1;
         roomReady = combatRoom = playableCombat = embeddedCombat = hasRoom = false;
         nextCheckpoint = null;
         ResetChoices();

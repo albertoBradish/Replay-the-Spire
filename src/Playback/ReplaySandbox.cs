@@ -1,5 +1,7 @@
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Leaderboard;
+using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.Models.Characters;
 using MegaCrit.Sts2.Core.Platform;
 using MegaCrit.Sts2.Core.Runs;
 using MegaCrit.Sts2.Core.Saves;
@@ -50,6 +52,20 @@ internal static class ReplaySandbox
     }
 
     internal static void Leave() => isolated = null;
+
+    internal static void RestoreEndingHistory(ModelId hero, int totalWins, int heroWins)
+    {
+        if (isolated == null || heroWins < 0 || totalWins < heroWins)
+            throw new InvalidDataException("终局记录的胜场数无效。");
+        // Only these two counters determine the Architect's available dialogue.
+        // The backing state is the in-memory viewer profile.
+        var progress = isolated.Progress;
+        foreach (var entry in progress.CharacterStats.Values)
+            entry.TotalWins = 0;
+        progress.GetOrCreateCharacterStats(hero).TotalWins = heroWins;
+        var other = ModelDb.Character<Ironclad>().Id == hero ? ModelDb.Character<Silent>().Id : ModelDb.Character<Ironclad>().Id;
+        progress.GetOrCreateCharacterStats(other).TotalWins = totalWins - heroWins;
+    }
 
     private static bool UseViewerProfile(ref SaveManager __result)
     {

@@ -3,6 +3,7 @@ using MegaCrit.Sts2.Core.Entities.Players;
 using Godot;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Map;
+using MegaCrit.Sts2.Core.Models.Events;
 using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
 using MegaCrit.Sts2.Core.Nodes.Screens.Map;
@@ -16,10 +17,15 @@ namespace SpireReplay.Playback;
 internal sealed class RoomChoices(RunState run, IReadOnlyList<ReplayEvent> timeline, bool inEventBattle = false)
 {
     private readonly RewardChoices rewards = new();
+    private readonly HashSet<int> appliedMarkers = [];
 
     internal Task<bool> ApplyAsync(int index)
     {
         var entry = timeline[index];
+        if (appliedMarkers.Contains(index))
+            return Task.FromResult(true);
+        if (entry.Kind == "direct-event")
+            return Task.FromResult(run.CurrentRoom is EventRoom { CanonicalEvent: TheArchitect });
         if (entry.Kind == "event-resume")
             return ResumeAsync(entry.ActionKey);
         if (entry.Kind == "reward")
@@ -45,10 +51,26 @@ internal sealed class RoomChoices(RunState run, IReadOnlyList<ReplayEvent> timel
         if (entry.Kind == "treasure" && run.CurrentRoom is TreasureRoom && NRun.Instance?.TreasureRoom is { } chest &&
             entry.ActionIndex is int relic && relic >= -1 && !timeline.Any(e => e.Kind == "reward"))
             return OpenTreasureAsync(chest, relic, entry.ActionKey);
+        if (entry.Kind is "camp-open" or "shop-open")
+        {
+            int completed = index + 1;
+            while (completed < timeline.Count && timeline[completed].Kind == "choice") completed++;
+            if (completed >= timeline.Count || timeline[completed].Kind + "-open" != entry.Kind ||
+                timeline[completed].ActionKey != entry.ActionKey || timeline[completed].ActionIndex != entry.ActionIndex)
+                return Task.FromResult(false);
+            return ApplyWithChildrenAsync(completed, index + 1, completed, markCompleted: true);
+        }
         if (entry.Kind is not ("event" or "camp" or "shop"))
             return Task.FromResult(false);
-        var children = ChildSelections(index);
-        return RoomChoiceAnswers.ApplyAsync(children, () => ApplyOptionAsync(entry));
+        int start = index, end = index;
+        if (entry.Kind == "event")
+        {
+            start = end = index + 1;
+            while (end < timeline.Count && timeline[end].Kind == "choice") end++;
+        }
+        else
+            while (start > 0 && timeline[start - 1].Kind == "choice") start--;
+        return ApplyWithChildrenAsync(index, start, end, markCompleted: false);
     }
 
     private async Task<bool> OpenTreasureAsync(NTreasureRoom chest, int index, string key)
@@ -74,7 +96,13 @@ internal sealed class RoomChoices(RunState run, IReadOnlyList<ReplayEvent> timel
         }
         if (!GodotObject.IsInstanceValid(chest) || !chest.IsInsideTree())
             return false;
-        picking.OnPicked(run.Players[0], index < 0 ? null : index);
+        if (index == -1)
+        {
+            picking.OnPicked(run.Players[0], null);
+            _ = animation.ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
+            return true;
+        }
+        picking.OnPicked(run.Players[0], index);
         await animation;
         return true;
     }
@@ -87,10 +115,11 @@ internal sealed class RoomChoices(RunState run, IReadOnlyList<ReplayEvent> timel
         {
             case ("event", EventRoom room):
                 var model = room.LocalMutableEvent;
-                if (option >= model.CurrentOptions.Count || model.CanonicalEncounter != null && !inEventBattle)
+                if (option >= model.CurrentOptions.Count ||
+                    model.CanonicalEncounter != null && !inEventBattle && model is not TheArchitect)
                     return false;
                 var eventOption = model.CurrentOptions[option];
-                if (eventOption.TextKey != entry.ActionKey || eventOption.IsLocked || eventOption.IsProceed ||
+                if (eventOption.TextKey != entry.ActionKey || eventOption.IsLocked || eventOption.IsProceed && model is not TheArchitect ||
                     NEventRoom.Instance == null)
                     return false;
                 NEventRoom.Instance.OptionButtonClicked(eventOption, option);
@@ -100,7 +129,12 @@ internal sealed class RoomChoices(RunState run, IReadOnlyList<ReplayEvent> timel
                 if (option >= room.Options.Count || room.Options[option].OptionId != entry.ActionKey ||
                     !room.Options[option].IsEnabled)
                     return false;
-                return await RunManager.Instance.RestSiteSynchronizer.ChooseLocalOption(option);
+                var selected = room.Options[option];
+                var button = NRestSiteRoom.Instance?.GetButtonForOption(selected);
+                if (button == null || AccessTools.Method(button.GetType(), "SelectOption")?.Invoke(button, [selected]) is not Task applying)
+                    return false;
+                await applying;
+                return true;
             case ("shop", MerchantRoom room):
                 NMerchantRoom.Instance?.OpenInventory();
                 // The beta moved the local inventory to MerchantSynchronizer.
@@ -144,20 +178,16 @@ internal sealed class RoomChoices(RunState run, IReadOnlyList<ReplayEvent> timel
         return true;
     }
 
-    private List<string> ChildSelections(int index)
+    private async Task<bool> ApplyWithChildrenAsync(int index, int start, int end, bool markCompleted)
     {
-        var answers = new List<string>();
-        if (timeline[index].Kind == "event")
+        var answers = new List<string>(end - start);
+        for (int child = start; child < end; child++) answers.Add(timeline[child].ActionKey);
+        bool applied = await RoomChoiceAnswers.ApplyAsync(answers, () => ApplyOptionAsync(timeline[index]));
+        if (applied)
         {
-            for (int i = index + 1; i < timeline.Count && timeline[i].Kind == "choice"; i++)
-                answers.Add(timeline[i].ActionKey);
+            for (int child = start; child < end; child++) appliedMarkers.Add(child);
+            if (markCompleted) appliedMarkers.Add(index);
         }
-        else
-        {
-            for (int i = index - 1; i >= 0 && timeline[i].Kind == "choice"; i--)
-                answers.Add(timeline[i].ActionKey);
-            answers.Reverse();
-        }
-        return answers;
+        return applied;
     }
 }
