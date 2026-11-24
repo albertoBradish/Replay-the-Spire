@@ -40,6 +40,7 @@ internal static partial class CaptureHooks
 
     private static void InstallChoices(Action<Type, string, string, bool> hook)
     {
+        InstallCrystalSphere(hook);
         hook(typeof(EventSynchronizer), nameof(EventSynchronizer.ChooseLocalOption), nameof(EventChoice), true);
         hook(typeof(MapSelectionSynchronizer), nameof(MapSelectionSynchronizer.PlayerVotedForMapCoord), nameof(MapChosen), true);
         hook(typeof(TreasureRoomRelicSynchronizer), nameof(TreasureRoomRelicSynchronizer.PickRelicLocally), nameof(TreasureChoice), true);
@@ -58,6 +59,8 @@ internal static partial class CaptureHooks
 
     private static void ResetChoices()
     {
+        crystalGrid = null;
+        crystalCanProceed = false;
         DecisionByAction.Clear();
         nextDecision = 0;
         ShopAttempts.Clear();
@@ -87,6 +90,9 @@ internal static partial class CaptureHooks
         lastSample = now;
         var manager = RunManager.Instance;
         bool available = roomReady && !tree.Paused && !manager.IsPaused && tree.Root.HasFocus();
+        if (available && crystalGrid is { IsFinished: true } && !crystalCanProceed &&
+            NOverlayStack.Instance?.Peek() is MegaCrit.Sts2.Core.Nodes.Events.Custom.CrystalSphere.NCrystalSphereScreen)
+            available = false;
         if (available && combatRoom && CombatManager.Instance.IsInProgress)
         {
             var selecting = NOverlayStack.Instance?.Peek() is NCardGridSelectionScreen ||
