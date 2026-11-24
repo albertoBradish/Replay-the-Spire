@@ -33,6 +33,12 @@ def install_mod(project, manifest, name, work, runtime, data, version, dotnet):
                     f"-p:GameVersion={version}", "--nologo"], cwd=ROOT, check=True)
     # Select the runtime output; ref/ and refint/ contain reference-only assemblies.
     dll = next((output / "bin").glob(f"*/release/{name}.dll"))
+    return stage_mod(dll, manifest, name, runtime)
+
+
+def stage_mod(dll, manifest, name, runtime):
+    if json.loads(manifest.read_text(encoding="utf-8-sig")).get("id") != name:
+        raise ValueError(f"Unexpected mod identity in {manifest}")
     dest = runtime / "mods" / name
     dest.mkdir(parents=True, exist_ok=True)
     shutil.copy2(dll, dest)
@@ -91,6 +97,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("game", type=Path, help="read-only local game folder")
     parser.add_argument("--pairs", type=int, default=2)
+    parser.add_argument("--candidate", type=Path, help="Measure the exact DLL from this packaged plugin directory")
     parser.add_argument("--gpu-index", type=int, help="Godot D3D12 adapter index (see the game log)")
     parser.add_argument("--dotnet", default="dotnet", help="path to a .NET 9 SDK executable")
     args = parser.parse_args()
@@ -111,8 +118,12 @@ def main():
     work = ROOT / ".local" / name / version
     runtime = work / "runtime"
     data = game / "data_sts2_windows_x86_64"
-    mod_hash = install_mod(ROOT / "src" / "SpireReplay.csproj", ROOT / "mod_manifest.json",
-                           "SpireReplay", work, runtime, data, version, args.dotnet)
+    if args.candidate:
+        package = args.candidate.resolve()
+        mod_hash = stage_mod(package / "SpireReplay.dll", package / "mod_manifest.json", "SpireReplay", runtime)
+    else:
+        mod_hash = install_mod(ROOT / "src" / "SpireReplay.csproj", ROOT / "mod_manifest.json",
+                               "SpireReplay", work, runtime, data, version, args.dotnet)
     probe_hash = install_mod(HERE / "ReplayPerf.csproj", HERE / "mod_manifest.json",
                              "ReplayPerf", work, runtime, data, version, args.dotnet)
     profile_name = "ReplayAcceptance-" + version
