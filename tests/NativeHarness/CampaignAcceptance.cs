@@ -93,6 +93,9 @@ internal static class CampaignAcceptance
                 throw new InvalidDataException($"No victory after {moves} UI actions; act {run.CurrentActIndex + 1}, floor {run.TotalFloor}, {run.CurrentRoom?.ModelId}, overlay {NOverlayStack.Instance?.Peek()?.GetType().Name}.");
             if (visits.Select(v => v.Act).Distinct().Count() != run.Acts.Count)
                 throw new InvalidDataException($"Native victory reached with only {visits.Select(v => v.Act).Distinct().Count()}/{run.Acts.Count} acts.");
+            int encounterRooms = visits.Count(visit => visit.Type is "Monster" or "Elite" or "Boss");
+            if (victory.Rooms.Count(room => room.HasCombat) < encounterRooms)
+                throw new InvalidDataException("The native recording omitted an encounter from the original route.");
             string archive = Path.Combine(ReplayStore.ExportsDirectory, victory.Id + ".spireplay");
             await JourneyAcceptance.Wait(() => File.Exists(archive), "campaign portable archive");
             using var zip = ZipFile.OpenRead(archive);
