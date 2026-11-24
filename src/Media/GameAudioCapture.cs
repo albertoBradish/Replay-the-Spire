@@ -6,7 +6,7 @@ using System.Runtime.Versioning;
 
 namespace SpireReplay.Media;
 
-/// <summary>Captures the audio rendered by the Windows game process into a 16-bit stereo PCM WAV.</summary>
+/// <summary>Captures the Windows game's 48 kHz stereo PCM for streaming or WAV output.</summary>
 public sealed class GameAudioCapture : IDisposable
 {
     public int SampleRate => 48000;
@@ -14,27 +14,37 @@ public sealed class GameAudioCapture : IDisposable
     public long FramesWritten => Interlocked.Read(ref written);
     public long StartedTimestamp { get; private set; }
 
-    private readonly string path;
+    private readonly string? path;
+    private readonly Action<byte[], int, int>? output;
+    private readonly Action<Exception>? onFailure;
     private readonly ManualResetEvent stop = new(false);
     private readonly TaskCompletionSource ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Thread worker;
     private readonly object lifetime = new();
     private long written;
+    private long finalFrames = -1;
     private Exception? failure;
     private bool disposed;
 
     [SupportedOSPlatform("windows10.0.20348")]
-    private GameAudioCapture(string path)
+    private GameAudioCapture(string? path, Action<byte[], int, int>? output, Action<Exception>? onFailure)
     {
         this.path = path;
+        this.output = output;
+        this.onFailure = onFailure;
         worker = new Thread(Record) { IsBackground = true, Name = "Replay the Spire audio" };
     }
 
-    public static GameAudioCapture Start(string wavPath)
+    public static GameAudioCapture Start(string wavPath) => Start(Path.GetFullPath(wavPath), null, null);
+
+    internal static GameAudioCapture Start(Action<byte[], int, int> output, Action<Exception>? onFailure = null) =>
+        Start(null, output, onFailure);
+
+    private static GameAudioCapture Start(string? path, Action<byte[], int, int>? output, Action<Exception>? onFailure)
     {
         if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 20348) || !Environment.Is64BitProcess)
             throw new PlatformNotSupportedException("游戏音轨导出需要 Windows 10 build 20348 或更高版本的 64 位系统。");
-        var capture = new GameAudioCapture(Path.GetFullPath(wavPath));
+        var capture = new GameAudioCapture(path, output, onFailure);
         capture.worker.SetApartmentState(ApartmentState.MTA);
         capture.worker.Start();
         try
@@ -51,12 +61,15 @@ public sealed class GameAudioCapture : IDisposable
         }
     }
 
-    public void Stop()
+    public void Stop() => Stop(-1);
+
+    internal void Stop(long frameCount)
     {
         lock (lifetime)
         {
             if (disposed) return;
             disposed = true;
+            Volatile.Write(ref finalFrames, frameCount);
             stop.Set();
             worker.Join();
             stop.Dispose();
@@ -75,8 +88,8 @@ public sealed class GameAudioCapture : IDisposable
         try
         {
             using var signal = new AutoResetEvent(false);
-            using var wave = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read, 65536);
-            wave.Write(new byte[44]);
+            using var wave = path == null ? null : new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read, 65536);
+            wave?.Write(new byte[44]);
             client = AudioInterfaces.Activate();
             var format = new AudioInterfaces.WaveFormat {
                 Tag = 1, Channels = 2, Rate = (uint)SampleRate, BytesPerSecond = (uint)(SampleRate * 4), Align = 4, Bits = 16
@@ -96,23 +109,40 @@ public sealed class GameAudioCapture : IDisposable
             Marshal.ThrowExceptionForHR(client.Start());
             started = true;
             ready.TrySetResult();
-            while (WaitHandle.WaitAny(waits) != 0)
+            while (WaitHandle.WaitAny(waits, output == null ? Timeout.Infinite : 100) != 0)
+            {
                 Drain(packets, wave, scratch, silence, stopping: false);
+                // A completely silent session can emit no WASAPI packets. Keep both inputs moving,
+                // leaving 100 ms for real packets whose delivery lagged their QPC timestamp.
+                if (output != null)
+                {
+                    long clock = (long)(Stopwatch.GetElapsedTime(StartedTimestamp).TotalSeconds * SampleRate);
+                    long gap = clock - written - SampleRate / 10;
+                    if (gap > 0) Pad(wave, gap, silence);
+                }
+            }
             var end = Stopwatch.GetTimestamp();
             Marshal.ThrowExceptionForHR(client.Stop());
             started = false;
             Drain(packets, wave, scratch, silence, stopping: true);
-            var endingFrame = (long)Math.Round(Stopwatch.GetElapsedTime(StartedTimestamp, end).TotalSeconds * SampleRate);
+            var endingFrame = Volatile.Read(ref finalFrames);
+            if (endingFrame < 0) endingFrame = (long)Math.Round(Stopwatch.GetElapsedTime(StartedTimestamp, end).TotalSeconds * SampleRate);
             // A silent process may supply no packets. Keep silence on the same real-time clock as the video.
             if (written < endingFrame) Pad(wave, endingFrame - written, silence);
-            else if (written > endingFrame)
+            else if (written > endingFrame && wave != null)
             {
                 wave.SetLength(44 + endingFrame * 4);
                 Interlocked.Exchange(ref written, endingFrame);
             }
-            WriteHeader(wave);
+            if (wave != null) WriteHeader(wave);
         }
-        catch (Exception error) { failure = error; ready.TrySetException(error); }
+        catch (Exception error)
+        {
+            Volatile.Write(ref failure, error);
+            ready.TrySetException(error);
+            try { onFailure?.Invoke(error); }
+            catch (Exception notificationError) { Volatile.Write(ref failure, new AggregateException(error, notificationError)); }
+        }
         finally
         {
             if (started) client?.Stop();
@@ -122,7 +152,7 @@ public sealed class GameAudioCapture : IDisposable
     }
 
     [SupportedOSPlatform("windows10.0.20348")]
-    private void Drain(AudioInterfaces.ICaptureClient packets, FileStream wave, byte[] scratch, byte[] silence, bool stopping)
+    private void Drain(AudioInterfaces.ICaptureClient packets, FileStream? wave, byte[] scratch, byte[] silence, bool stopping)
     {
         ulong epoch = (ulong)(StartedTimestamp / (double)Stopwatch.Frequency * 10_000_000);
         while (stopping || !stop.WaitOne(0))
@@ -149,28 +179,38 @@ public sealed class GameAudioCapture : IDisposable
                 else if (packetStart < written - SampleRate / 200 || (written == 0 && packetStart < 0))
                     skipFrames = (int)Math.Min(frames, written - packetStart);
             }
-            var remaining = frames - skipFrames;
+            int remaining = (int)frames - skipFrames;
+            long limit = Volatile.Read(ref finalFrames);
+            if (limit >= 0) remaining = (int)Math.Clamp(limit - written, 0, remaining);
             CheckSize(written + remaining);
-            wave.Write(scratch, skipFrames * 4, bytes - skipFrames * 4);
+            Write(wave, scratch, skipFrames * 4, remaining * 4);
             Interlocked.Add(ref written, remaining);
         }
     }
 
-    private void Pad(FileStream wave, long count, byte[] silence)
+    private void Write(FileStream? wave, byte[] bytes, int offset, int count)
     {
+        if (wave != null) wave.Write(bytes, offset, count);
+        else output!(bytes, offset, count);
+    }
+
+    private void Pad(FileStream? wave, long count, byte[] silence)
+    {
+        long limit = Volatile.Read(ref finalFrames);
+        if (limit >= 0) count = Math.Min(count, Math.Max(0, limit - written));
         CheckSize(written + count);
         while (count > 0)
         {
             int frames = (int)Math.Min(count, silence.Length / 4);
-            wave.Write(silence, 0, frames * 4);
+            Write(wave, silence, 0, frames * 4);
             Interlocked.Add(ref written, frames);
             count -= frames;
         }
     }
 
-    private static void CheckSize(long frames)
+    private void CheckSize(long frames)
     {
-        if (frames < 0 || frames * 4 > uint.MaxValue - 36)
+        if (frames < 0 || (path != null && frames > (uint.MaxValue - 36) / 4))
             throw new IOException("本段 PCM 音轨超过 WAV 容量。");
     }
 
