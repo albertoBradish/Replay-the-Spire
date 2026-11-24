@@ -10,22 +10,26 @@ namespace SpireReplay.Playback;
 
 internal static class RoomChoiceAnswers
 {
-    private static readonly AsyncLocal<Queue<string>?> answers = new();
+    internal sealed record Entry(int Index, string Key);
+    internal sealed record Sequence(Queue<Entry> Pending, Func<int, Action, string, Task> PresentGrid);
+    private static readonly AsyncLocal<Sequence?> answers = new();
+    internal static Sequence? Current => ReplayPlayer.IsActive && !CombatManager.Instance.IsInProgress ? answers.Value : null;
 
     internal static void Install(Harmony harmony)
     {
         harmony.Patch(AccessTools.Method(typeof(PlayerChoiceSynchronizer), nameof(PlayerChoiceSynchronizer.WaitForRemoteChoice)),
             prefix: new HarmonyMethod(typeof(RoomChoiceAnswers), nameof(Answer)));
+        RoomCardGrid.Install(harmony);
     }
 
-    internal static async Task<bool> ApplyAsync(IReadOnlyList<string> keys, Func<Task<bool>> action)
+    internal static async Task<bool> ApplyAsync(IReadOnlyList<Entry> keys, Func<int, Action, string, Task> presentGrid, Func<Task<bool>> action)
     {
-        if (keys.Any(key => !key.StartsWith("index:", StringComparison.Ordinal) &&
-            !key.StartsWith("deck:", StringComparison.Ordinal)))
+        if (keys.Any(e => !e.Key.StartsWith("index:", StringComparison.Ordinal) &&
+            !e.Key.StartsWith("deck:", StringComparison.Ordinal)))
             return false;
         var previous = answers.Value;
-        var queue = new Queue<string>(keys);
-        answers.Value = queue;
+        var queue = new Queue<Entry>(keys);
+        answers.Value = new(queue, presentGrid);
         try
         {
             bool success = await action();
@@ -41,15 +45,13 @@ internal static class RoomChoiceAnswers
 
     private static void Answer(PlayerChoiceSynchronizer __instance, Player player, uint choiceId)
     {
-        if (!ReplayPlayer.IsActive || CombatManager.Instance.IsInProgress || answers.Value is not { } queue)
+        if (Current is not { } sequence)
             return;
-        if (!queue.TryDequeue(out var value))
+        if (!sequence.Pending.TryDequeue(out var entry))
             throw new InvalidDataException("该节点缺少选牌记录。");
-        string[] parts = value.Split(':', 2);
-        int[] selected = parts[1].Length == 0 ? [] : parts[1].Split(',')
-            .Select(value => int.Parse(value, NumberStyles.None, CultureInfo.InvariantCulture)).ToArray();
+        int[] selected = Indices(entry);
         NetPlayerChoiceResult answer;
-        if (parts[0] == "deck")
+        if (entry.Key.StartsWith("deck:", StringComparison.Ordinal))
         {
             if (selected.Any(index => (uint)index >= player.Deck.Cards.Count))
                 throw new InvalidDataException("牌组顺序与记录不同。");
@@ -59,5 +61,11 @@ internal static class RoomChoiceAnswers
         else
             answer = new() { type = PlayerChoiceType.Index, indexes = selected.ToList() };
         __instance.ReceiveReplayChoice(player, choiceId, answer);
+    }
+
+    internal static int[] Indices(Entry entry)
+    {
+        var list = entry.Key[(entry.Key.IndexOf(':') + 1)..];
+        return list.Length == 0 ? [] : list.Split(',').Select(value => int.Parse(value, NumberStyles.None, CultureInfo.InvariantCulture)).ToArray();
     }
 }

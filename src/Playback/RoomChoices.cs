@@ -14,7 +14,8 @@ namespace SpireReplay.Playback;
 
 // Room checkpoints restore the original native presentation. Apply a decision
 // only when both the recorded index and the durable option ID match that room.
-internal sealed class RoomChoices(RunState run, IReadOnlyList<ReplayEvent> timeline, bool inEventBattle = false)
+internal sealed class RoomChoices(RunState run, IReadOnlyList<ReplayEvent> timeline, bool inEventBattle,
+    Func<int, Action, string, Task> presentGrid)
 {
     private readonly RewardChoices rewards = new();
     private readonly HashSet<int> appliedMarkers = [];
@@ -180,9 +181,9 @@ internal sealed class RoomChoices(RunState run, IReadOnlyList<ReplayEvent> timel
 
     private async Task<bool> ApplyWithChildrenAsync(int index, int start, int end, bool markCompleted)
     {
-        var answers = new List<string>(end - start);
-        for (int child = start; child < end; child++) answers.Add(timeline[child].ActionKey);
-        bool applied = await RoomChoiceAnswers.ApplyAsync(answers, () => ApplyOptionAsync(timeline[index]));
+        var answers = new List<RoomChoiceAnswers.Entry>(end - start);
+        for (int child = start; child < end; child++) answers.Add(new(child, timeline[child].ActionKey));
+        bool applied = await RoomChoiceAnswers.ApplyAsync(answers, presentGrid, () => ApplyOptionAsync(timeline[index]));
         if (applied)
         {
             for (int child = start; child < end; child++) appliedMarkers.Add(child);

@@ -346,10 +346,13 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
 
     private async Task PlayChoicesAsync(RunState run, IReadOnlyList<ReplayEvent> timeline)
     {
-        var driver = new RoomChoices(run, timeline, this.timeline.Battle != null);
-        for (int i = 0; i < timeline.Count; i++)
+        int shown = -1, prepared = -1;
+        bool presentingGrid = false;
+        async Task BeginChoice(int index)
         {
-            var entry = timeline[i];
+            if (prepared >= index) return;
+            prepared = index;
+            var entry = timeline[index];
             if (seeking && targetDecision >= 0 && Decision + 1 >= targetDecision || stepToNext && Decision > stepFrom)
             {
                 SetPaused(true);
@@ -358,13 +361,10 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
             await Until(() => true);
             if (entry.DecisionSeconds is double seconds && double.IsFinite(seconds) && seconds > 0)
                 await WaitPresentationAsync(seconds, originalOnly: true);
-            if (entry.Kind == "event-resume" && run.CurrentRoom is CombatRoom context && !context.Encounter.ShouldGiveRewards)
-                await Until(() => run.CurrentRoom is EventRoom && NEventRoom.Instance != null);
-            if (entry.Kind == "event" && run.CurrentRoom is EventRoom { CanonicalEvent: TheArchitect } finale)
-                await Until(() => finale.LocalMutableEvent.CurrentOptions.Count > 0);
-            var applied = driver.ApplyAsync(i);
-            await Until(() => applied.IsCompleted);
-            bool animated = await applied;
+        }
+        async Task ShowChoice(int index, bool animated)
+        {
+            var entry = timeline[index];
             if (animated) NativeChoiceCount++;
             else CaptionChoiceCount++;
             Status = (animated ? "选择 · " : "记录 · ") + entry.Label;
@@ -372,7 +372,44 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
             caption.Show(entry, animated);
             Decision++;
             Cursor++;
+            shown = index;
             await WaitPresentationAsync(1.65);
+        }
+        async Task PresentGrid(int child, Action highlight, string titles)
+        {
+            presentingGrid = true;
+            try
+            {
+                // The event option is still awaiting its nested picker. Expose the parent
+                // and child as separate seek/step boundaries while that picker is visible.
+                for (int previous = shown + 1; previous < child; previous++)
+                {
+                    await BeginChoice(previous);
+                    await ShowChoice(previous, true);
+                }
+                await BeginChoice(child);
+                await WaitPresentationAsync(1.2);
+                highlight();
+                caption ??= new DecisionCaption(tree);
+                caption.Show(timeline[child] with { Label = titles.Length == 0 ? timeline[child].Label : titles }, true);
+                await WaitPresentationAsync(1.25);
+            }
+            finally { presentingGrid = false; }
+        }
+        var driver = new RoomChoices(run, timeline, this.timeline.Battle != null, PresentGrid);
+        for (int i = 0; i < timeline.Count; i++)
+        {
+            if (i <= shown) continue;
+            var entry = timeline[i];
+            await BeginChoice(i);
+            if (entry.Kind == "event-resume" && run.CurrentRoom is CombatRoom context && !context.Encounter.ShouldGiveRewards)
+                await Until(() => run.CurrentRoom is EventRoom && NEventRoom.Instance != null);
+            if (entry.Kind == "event" && run.CurrentRoom is EventRoom { CanonicalEvent: TheArchitect } finale)
+                await Until(() => finale.LocalMutableEvent.CurrentOptions.Count > 0);
+            var applied = driver.ApplyAsync(i);
+            await Until(() => applied.IsCompleted, () => presentingGrid);
+            bool animated = await applied;
+            if (i > shown) await ShowChoice(i, animated);
         }
     }
 
@@ -449,7 +486,7 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
             throw new InvalidDataException(mismatch);
     }
 
-    private async Task Until(Func<bool> ready)
+    private async Task Until(Func<bool> ready, Func<bool>? presenting = null)
     {
         var clock = Stopwatch.StartNew();
         while (true)
@@ -457,7 +494,7 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
             CheckActive();
             if (!Paused && ready())
                 return;
-            if (Paused)
+            if (Paused || presenting?.Invoke() == true)
                 clock.Restart();
             if (clock.Elapsed > TimeSpan.FromSeconds(35))
                 throw new TimeoutException($"第 {Turn} 回合、动作 {Cursor + 1} 等待超时（已校验 {verifiedCount}/{expected.Count}）。");

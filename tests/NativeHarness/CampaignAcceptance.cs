@@ -357,7 +357,7 @@ internal static class CampaignAcceptance
                 File.WriteAllText(coveragePath, JsonSerializer.Serialize(results, Json));
             }
         }
-        if (results.Any(r => r.Mode != "journal" && !r.Passed) || results.Count(r => r.Mode == "combat") != expectedCombats)
+        if (results.Any(r => !r.Passed) || results.Count(r => r.Mode == "combat") != expectedCombats)
             throw new InvalidDataException("See " + coveragePath + " for divergent rooms.");
     }
 
