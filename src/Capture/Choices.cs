@@ -1,3 +1,4 @@
+using MegaCrit.Sts2.Core.Nodes.Rewards;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -234,8 +235,18 @@ internal static partial class CaptureHooks
 
     private static void RewardOpened(Reward reward)
     {
-        if (Recording) Observe(() => ReplayStore.Add("reward", reward.Description.GetFormattedText(), decisionSeconds: TakeTime(),
-            actionKey: RewardChoices.OpenKey(reward), actionIndex: reward.RewardsSetIndex));
+        if (!Recording) return;
+        Observe(() =>
+        {
+            int ordinal = 0;
+            if (NOverlayStack.Instance?.Peek() is NRewardsScreen screen)
+            {
+                var offered = screen.FindChildren("*", "", true, false).OfType<NRewardButton>().ToArray();
+                ordinal = Array.FindIndex(offered, button => ReferenceEquals(button.Reward, reward)) + 1;
+            }
+            ReplayStore.Add("reward", reward.Description.GetFormattedText(), amount: ordinal, decisionSeconds: TakeTime(),
+                actionKey: RewardChoices.OpenKey(reward), actionIndex: reward.RewardsSetIndex);
+        });
     }
 
     private static void RewardsSkipped()

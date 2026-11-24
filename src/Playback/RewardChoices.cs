@@ -58,13 +58,23 @@ internal sealed class RewardChoices
         }
         if (!entry.ActionKey.StartsWith("open:", StringComparison.Ordinal))
             return false;
-        var matches = screen.FindChildren("*", "", true, false).OfType<NRewardButton>()
-            .Where(b => b.IsEnabled && b.Reward is { SuccessfullySelected: false } reward &&
-                reward.RewardsSetIndex == entry.ActionIndex && MatchesOffer(entry, reward))
-            .Take(2).ToArray();
-        if (matches.Length != 1)
-            return false;
-        var button = matches[0];
+        var offered = screen.FindChildren("*", "", true, false).OfType<NRewardButton>().ToArray();
+        bool Matches(NRewardButton b) => b.IsEnabled && b.Reward is { SuccessfullySelected: false } reward &&
+            reward.RewardsSetIndex == entry.ActionIndex && MatchesOffer(entry, reward);
+        NRewardButton? button;
+        if (entry.Amount > 0)
+        {
+            button = offered.ElementAtOrDefault(entry.Amount - 1);
+            if (button == null || !Matches(button)) return false;
+        }
+        else
+        {
+            // Older recordings contain the reward category and offer identity, but no button ordinal.
+            var matches = offered.Where(Matches).Take(2).ToArray();
+            if (matches.Length == 0 || matches.Length > 1 &&
+                (matches[0].Reward is not PotionReward || !entry.ActionKey.Contains('|'))) return false;
+            button = matches[0];
+        }
         if (button.Reward is CardReward && (next?.Kind != "reward" ||
             !(next.ActionKey.StartsWith("pick:", StringComparison.Ordinal) ||
               next.ActionKey.StartsWith("alternative:", StringComparison.Ordinal) || next.ActionKey == "skip-card")))
