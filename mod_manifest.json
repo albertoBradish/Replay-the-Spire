@@ -1,0 +1,13 @@
+{
+  "id": "SpireReplay",
+  "pck_name": "SpireReplay",
+  "name": "Replay the Spire / 回放尖塔",
+  "author": "albertoBradish",
+  "description": "在游玩时记录对局，在游戏中观看回放、查看决策用时与卡牌统计，并导出游玩图集。",
+  "version": "0.1.0",
+  "has_pck": false,
+  "has_dll": true,
+  "affects_gameplay": false,
+  "dependencies": [],
+  "min_game_version": "0.111.1"
+}
