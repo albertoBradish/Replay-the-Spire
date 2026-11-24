@@ -18,12 +18,15 @@ internal sealed class DecisionCaption
         rows.AddChild(heading);
         rows.AddChild(choice);
         panel.AddChild(rows);
-        layer.AddChild(panel);
+        var viewport = new Control { MouseFilter = Control.MouseFilterEnum.Ignore };
+        layer.AddChild(viewport);
+        viewport.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+        viewport.AddChild(panel);
         tree.Root.AddChild(layer);
-        panel.SetAnchorAndOffset(Side.Left, 0.04f, 0);
-        panel.SetAnchorAndOffset(Side.Right, 0.47f, 0);
-        panel.SetAnchorAndOffset(Side.Top, 0.77f, 0);
-        panel.SetAnchorAndOffset(Side.Bottom, 0.77f, 0);
+        panel.AnchorLeft = .04f;
+        panel.AnchorRight = .47f;
+        panel.AnchorTop = panel.AnchorBottom = .77f;
+        panel.OffsetLeft = panel.OffsetRight = panel.OffsetTop = panel.OffsetBottom = 0;
         choice.AutowrapMode = TextServer.AutowrapMode.WordSmart;
         choice.MaxLinesVisible = 3;
     }
