@@ -1,4 +1,6 @@
 using Godot;
+using MegaCrit.Sts2.Core.Nodes.Combat;
+using MegaCrit.Sts2.Core.Nodes.Rooms;
 using SpireReplay.Playback;
 using System.Diagnostics;
 using static SpireReplay.Interface.ReplayStyle;
@@ -463,7 +465,7 @@ internal sealed class ReplayToolbar
                     name += $"-decision-{moment!.Decision:D5}";
                     featured = true;
                 }
-                await WriteFrame(name + (destination == null ? ".png" : ".jpg"), token, destination);
+                await WriteFrame(name + (destination == null ? ".png" : ".jpg"), token, destination, featuredCard: atCard);
                 captured++;
                 lastEvent = at;
             }
@@ -488,13 +490,19 @@ internal sealed class ReplayToolbar
         if (!ReplayPlayer.IsActive) throw new InvalidOperationException(T("回放已关闭。", "Replay closed."));
     }
 
-    private async Task WriteFrame(string filename, CancellationToken token, string? destination = null)
+    private async Task WriteFrame(string filename, CancellationToken token, string? destination = null, bool featuredCard = false)
     {
         if (DisplayServer.GetName().Equals("headless", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException(T("请在图形窗口中截取画面。", "Open the graphical game to capture a frame."));
+        // Decision stepping can freeze a turn banner over the card and damage it illustrates.
+        Control[] banners = featuredCard && NCombatRoom.Instance is { } combat
+            ? combat.GetChildren().OfType<Control>().Where(node => node.Visible &&
+                node is NPlayerTurnBanner or NEnemyTurnBanner or NCombatStartBanner).ToArray()
+            : [];
         panel.Hide();
         try
         {
+            foreach (var banner in banners) banner.Hide();
             // Read only after a complete frame has actually been presented with the toolbar hidden.
             await tree.ToSignal(tree, SceneTree.SignalName.ProcessFrame);
             bool drawn = false;
@@ -524,7 +532,12 @@ internal sealed class ReplayToolbar
             }
             finally { if (File.Exists(pending)) File.Delete(pending); }
         }
-        finally { panel.Show(); }
+        finally
+        {
+            foreach (var banner in banners)
+                if (GodotObject.IsInstanceValid(banner) && !banner.IsQueuedForDeletion()) banner.Show();
+            panel.Show();
+        }
     }
 
     private void Feedback(string text)
