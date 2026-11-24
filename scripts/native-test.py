@@ -13,7 +13,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
 parser.add_argument("game", type=Path)
-parser.add_argument("phase", choices=["prepare", "record", "watch", "journey-record", "journey-watch", "video-room", "video-run", "video-cancel", "video-hd", "video-sync", "video-muted-mix", "video-muted", "timing", "timing-watch", "campaign-record", "campaign-watch", "characters-record", "characters-watch", "modded-record", "modded-watch", "control", "choices-record", "choices-watch", "damage-record", "reward-record", "reward-watch", "facilities-record", "facilities-watch", "event-battle-record", "event-battle-watch", "resume-record", "resume-watch", "transfer", "forum-album", "manual"])
+parser.add_argument("phase", choices=["prepare", "record", "watch", "journey-record", "journey-watch", "video-room", "video-run", "video-cancel", "video-hd", "video-sync", "video-muted-mix", "video-muted", "timing", "timing-watch", "campaign-record", "campaign-watch", "campaign-album", "campaign-film", "characters-record", "characters-watch", "modded-record", "modded-watch", "control", "choices-record", "choices-watch", "damage-record", "reward-record", "reward-watch", "facilities-record", "facilities-watch", "event-battle-record", "event-battle-watch", "resume-record", "resume-watch", "transfer", "forum-album", "manual"])
 parser.add_argument("--name", default="acceptance")
 parser.add_argument("--candidate", type=Path, help="Stage and test this exact packaged plugin directory")
 parser.add_argument("--extra-mod", type=Path, action="append", default=[], help="Copy an optional local mod into a new isolated test session")
@@ -205,5 +205,5 @@ report = dict(plugin_sha256=hashlib.sha256((runtime / "mods/SpireReplay/SpireRep
 print(json.dumps(report, ensure_ascii=True))
 if args.gpu_index is not None and (gpu is None or gpu["index"] != args.gpu_index):
     raise SystemExit(f"The game did not select requested GPU {args.gpu_index}: {gpu}")
-if not report["marker"] or proc.returncode or "REPLAY_TEST_FAILURE" in text or ((args.phase.endswith("watch") or args.phase.startswith("video-") or args.phase in ("forum-album", "transfer")) and (diff or changed_settings)):
+if not report["marker"] or proc.returncode or "REPLAY_TEST_FAILURE" in text or ((args.phase.endswith("watch") or args.phase.startswith("video-") or args.phase in ("forum-album", "transfer", "campaign-album", "campaign-film")) and (diff or changed_settings)):
     raise SystemExit(1)

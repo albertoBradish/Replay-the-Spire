@@ -85,6 +85,17 @@ public static class NativeRun
             else if (phase == "event-battle-record") await EventBattleAcceptance.RecordAsync(game);
             else if (phase == "event-battle-watch") await EventBattleAcceptance.WatchAsync();
             else if (phase == "forum-album") await UiAcceptance.ForumAsync();
+            else if (phase is "campaign-album" or "campaign-film")
+            {
+                var run = ReplayStore.ListRuns().Single(r => r.Seed == "CAMPAIGNREPLAY");
+                if (phase == "campaign-album") await UiAcceptance.ForumAsync(run.Id);
+                else
+                {
+                    using var route = AudioTestOutput.Open();
+                    await VideoAcceptance.ExportAsync(run.Id, run.Rooms.Last(r => r.HasCombat).Index, wholeRun: true);
+                }
+                GD.Print("REPLAY_" + phase.Replace('-', '_').ToUpperInvariant() + "_PASS");
+            }
             else if (phase == "transfer") await TransferAcceptance.RunAsync(game);
             else if (phase == "resume-record") await ResumeAcceptance.ContinueAsync(menu, game);
             else if (phase == "resume-watch") await ResumeAcceptance.WatchAsync();

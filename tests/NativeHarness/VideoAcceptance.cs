@@ -97,7 +97,8 @@ internal static class VideoAcceptance
                 await Wait(() => VideoExporter.IsRecording, "start cancellable encoder");
                 ((Button)Progress()!.FindChild("CancelVideoExport", true, false)).EmitSignal(BaseButton.SignalName.Pressed);
             }
-            await Wait(() => library.Visible && !VideoExporter.IsRecording && !ReplayPlayer.IsActive, "finish video", wholeRun ? 300 : 120);
+            double exportDeadline = wholeRun ? Math.Max(300, catalog[runChoice].Rooms.Count * 60) : 120;
+            await Wait(() => library.Visible && !VideoExporter.IsRecording && !ReplayPlayer.IsActive, "finish video", exportDeadline);
             var created = Directory.GetFiles(folder, "*.mp4").Where(p => !before.Contains(p)).ToArray();
             if (testCancel)
             {

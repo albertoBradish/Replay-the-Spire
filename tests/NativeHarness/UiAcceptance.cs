@@ -50,7 +50,7 @@ internal static class UiAcceptance
             using (var source = root.GetTexture().GetImage()) sourceSize = source.GetSize();
             action.EmitSignal(BaseButton.SignalName.Pressed);
             await Wait(() => !window.Visible, "start whole-run album");
-            await Wait(() => window.Visible && !ReplayPlayer.IsActive, "finish whole-run album", 240);
+            await Wait(() => window.Visible && !ReplayPlayer.IsActive, "finish whole-run album", Math.Max(240, run.Rooms.Count * 45));
             if (ReplayPlayer.Speed != speed || ReplayPlayer.OriginalTiming != timing)
                 throw new InvalidDataException("Album changed the viewer's playback controls");
             var folder = Directory.GetDirectories(exports, "Replay-*").SingleOrDefault(f => !previous.Contains(f));

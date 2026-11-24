@@ -13,6 +13,7 @@ parser.add_argument("--name", required=True, help="New isolated session name")
 parser.add_argument("--candidate", type=Path, help="Use the exact DLL from this packaged plugin directory")
 parser.add_argument("--ffmpeg", type=Path, help="Enable media tests with this FFmpeg executable")
 parser.add_argument("--campaign", action="store_true", help="Also play and verify a complete native campaign")
+parser.add_argument("--campaign-media", action="store_true", help="Also export and inspect the full campaign album and movie")
 parser.add_argument("--validator", type=Path, help="Optional full-log validator accepting LOG --require MARKER --output JSON")
 args = parser.parse_args()
 if not args.name.replace("-", "").isalnum():
@@ -94,8 +95,12 @@ if any(r["phase"] == "journey-record" and r["passed"] for r in results):
     native("forum-album")
     if args.ffmpeg:
         native("video-run")
-if args.campaign:
+if args.campaign or args.campaign_media:
     record_and_watch("campaign")
+    if args.campaign_media and any(r["phase"] == "campaign-watch" and r["passed"] for r in results):
+        native("campaign-album")
+        if args.ffmpeg:
+            native("campaign-film")
 failed = [r["phase"] for r in results if not r["passed"]]
 print(json.dumps(dict(game=version, phases=len(results), failed=failed, report=str(work / "suite.json")), ensure_ascii=True))
 raise SystemExit(bool(failed))
