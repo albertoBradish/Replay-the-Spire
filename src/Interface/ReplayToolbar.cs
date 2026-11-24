@@ -520,7 +520,7 @@ internal sealed class ReplayToolbar
                 }
             }
             finally { RenderingServer.FramePostDraw -= Drawn; }
-            using var image = tree.Root.GetTexture().GetImage();
+            using var image = await ReadPresentedFrame(token, destination != null);
             if (image == null || image.IsEmpty()) throw new IOException(T("无法读取游戏画面。", "Could not read the game frame."));
             string path = Path.Combine(destination ?? Gallery.FrameDirectory(run.Id, room.Index), filename);
             string pending = path + ".partial";
@@ -538,6 +538,36 @@ internal sealed class ReplayToolbar
                 if (GodotObject.IsInstanceValid(banner) && !banner.IsQueuedForDeletion()) banner.Show();
             panel.Show();
         }
+    }
+
+    private async Task<Image> ReadPresentedFrame(CancellationToken token, bool albumFrame)
+    {
+        // At a decision boundary the playback clock can freeze a map fade halfway through.
+        // Advance visual tweens while the decision loop remains paused, then restore its clock.
+        double scale = Engine.TimeScale;
+        var clock = Stopwatch.StartNew();
+        try
+        {
+            while (true)
+            {
+                token.ThrowIfCancellationRequested();
+                var image = tree.Root.GetTexture().GetImage();
+                if (!albumFrame || image == null || image.IsEmpty()) return image!;
+                float min = 1, max = 0;
+                for (int y = 1; y < 8; y++)
+                    for (int x = 1; x < 12; x++)
+                    {
+                        float light = image.GetPixel(x * image.GetWidth() / 12, y * image.GetHeight() / 8).Luminance;
+                        min = Math.Min(min, light);
+                        max = Math.Max(max, light);
+                    }
+                if (max - min >= .09f || clock.Elapsed.TotalSeconds >= 2) return image;
+                image.Dispose();
+                if (scale == 0) Engine.TimeScale = 1;
+                await tree.ToSignal(tree.CreateTimer(.1, true, false, true), SceneTreeTimer.SignalName.Timeout);
+            }
+        }
+        finally { Engine.TimeScale = scale; }
     }
 
     private void Feedback(string text)
