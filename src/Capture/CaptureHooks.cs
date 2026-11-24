@@ -19,6 +19,7 @@ using MegaCrit.Sts2.Core.Rooms;
 using MegaCrit.Sts2.Core.Runs;
 using MegaCrit.Sts2.Core.Saves;
 using SpireReplay.Playback;
+using NativeHooks = MegaCrit.Sts2.Core.Hooks.Hook;
 
 namespace SpireReplay.Capture;
 
@@ -56,7 +57,9 @@ internal static partial class CaptureHooks
         Hook(typeof(RunManager), nameof(RunManager.OnEnded), nameof(Ended), true);
         Hook(typeof(RunManager), nameof(RunManager.CleanUp), nameof(Detach));
         Hook(typeof(CombatHistory), nameof(CombatHistory.CardPlayFinished), nameof(CardPlayed));
-        Hook(typeof(CombatHistory), nameof(CombatHistory.DamageReceived), nameof(Damaged));
+        // The history omits the finishing blow once IsEnding flips. This native dispatch receives
+        // every resolved hit, including redirected damage and fully blocked hits, before death cleanup.
+        Hook(typeof(NativeHooks), nameof(NativeHooks.AfterDamageGiven), nameof(Damaged), true);
         Hook(typeof(CombatHistory), nameof(CombatHistory.BlockGained), nameof(Blocked));
         Hook(typeof(CombatHistory), nameof(CombatHistory.CardDrawn), nameof(Drawn));
         InstallChoices(Hook);
@@ -233,17 +236,19 @@ internal static partial class CaptureHooks
             cardPlay.Card.Title, combatState.RoundNumber, cardPlay.Card.Id.ToString(), 1, actionIndex: ExecutingDecision));
     }
 
-    private static void Damaged(ICombatState combatState, Creature receiver, DamageResult result, CardModel? cardSource)
+    private static void Damaged(ICombatState combatState, DamageResult results, CardModel? cardSource)
     {
-        if (!Recording || receiver.Side != CombatSide.Enemy) return;
+        if (!Recording || results.Receiver.Side != CombatSide.Enemy ||
+            (results.UnblockedDamage == 0 && results.BlockedDamage == 0)) return;
         Observe(() =>
         {
             var id = cardSource?.Id.ToString() ?? "";
             var label = cardSource?.Title ?? "其他来源";
-            if (result.UnblockedDamage > 0)
-                ReplayStore.Add("damage", label, combatState.RoundNumber, id, result.UnblockedDamage, actionIndex: ExecutingDecision);
-            if (result.BlockedDamage > 0)
-                ReplayStore.Add("blocked", label, combatState.RoundNumber, id, result.BlockedDamage, actionIndex: ExecutingDecision);
+            // UnblockedDamage is the actual HP delta. The native result reports overkill separately.
+            if (results.UnblockedDamage > 0)
+                ReplayStore.Add("damage", label, combatState.RoundNumber, id, results.UnblockedDamage, actionIndex: ExecutingDecision);
+            if (results.BlockedDamage > 0)
+                ReplayStore.Add("blocked", label, combatState.RoundNumber, id, results.BlockedDamage, actionIndex: ExecutingDecision);
         });
     }
 
