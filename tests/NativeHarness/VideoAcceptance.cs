@@ -48,7 +48,7 @@ internal static class VideoAcceptance
             await Wait(() => Library() == null, "close previous library");
         }
         NGame.Instance.MainMenu!.GetNode<Button>("ReplayTheSpireEntry").EmitSignal(BaseButton.SignalName.Pressed);
-        await Wait(() => Library()?.Visible == true, "open video library");
+        await Wait(() => UiAcceptance.HasLoadedRuns(Library()), "load video library");
         var library = Library()!;
         try
         {

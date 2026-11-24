@@ -7,6 +7,10 @@ namespace ReplayHarness;
 
 internal static class UiAcceptance
 {
+    internal static bool HasLoadedRuns(Window? window) =>
+        window is { Visible: true } &&
+        window.FindChild("RunPicker", true, false) is OptionButton { Disabled: false, ItemCount: > 0 };
+
     internal static async Task ForumAsync(string? runId = null)
     {
         var game = NGame.Instance!;
@@ -32,7 +36,7 @@ internal static class UiAcceptance
         var run = runId == null ? runs.First(r => r.Rooms.Any(x => x.HasCombat) &&
             r.Rooms.Any(x => !x.HasCombat && x.HasCheckpoint && ReplayStore.LoadEvents(r.Id, x.Index).Any(e => e.Kind == "event"))) : runs.Single(x => x.Id == runId);
         game.MainMenu!.GetNode<Button>("ReplayTheSpireEntry").EmitSignal(BaseButton.SignalName.Pressed);
-        await Wait(() => Library()?.Visible == true, "open forum library");
+        await Wait(() => HasLoadedRuns(Library()), "load forum library");
         var window = Library()!;
         try
         {
@@ -135,7 +139,10 @@ internal static class UiAcceptance
         await CloseLibrary();
         var menu = game.MainMenu ?? throw new InvalidOperationException("Main menu unavailable");
         menu.GetNode<Button>("ReplayTheSpireEntry").EmitSignal(BaseButton.SignalName.Pressed);
-        await Wait(() => Library()?.Visible == true, "open library");
+        // A player can close the window while its first catalog read is still outstanding.
+        await CloseLibrary();
+        menu.GetNode<Button>("ReplayTheSpireEntry").EmitSignal(BaseButton.SignalName.Pressed);
+        await Wait(() => HasLoadedRuns(Library()), "load reopened library");
         var browser = Library()!;
         try
         {
