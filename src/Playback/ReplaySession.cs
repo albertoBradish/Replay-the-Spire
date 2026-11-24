@@ -396,7 +396,8 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
             }
             finally { presentingGrid = false; }
         }
-        var driver = new RoomChoices(run, timeline, this.timeline.Battle != null, PresentGrid);
+        var driver = new RoomChoices(run, timeline, this.timeline.Battle != null, PresentGrid,
+            ready => Until(ready), seconds => WaitPresentationAsync(seconds));
         for (int i = 0; i < timeline.Count; i++)
         {
             if (i <= shown) continue;

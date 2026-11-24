@@ -42,12 +42,14 @@ internal sealed class DecisionCaption
             "event-resume" => T("返回事件", "Back to event"),
             "direct-event" => T("终局", "Finale"),
             "treasure" => T("宝箱", "Treasure"),
+            "crystal" or "crystal-board" => T("水晶球", "Crystal sphere"),
             _ => T("选择", "Decision")
         };
         heading.Text = applied ? title : title + T(" · 操作记录", " · Recorded choice");
         if (entry.DecisionSeconds is double seconds && double.IsFinite(seconds))
             heading.Text += $"    {seconds:0.#} s";
-        choice.Text = entry.Label;
+        choice.Text = !applied && entry.Kind == "event" && entry.ActionKey.StartsWith("CRYSTAL_SPHERE.", StringComparison.Ordinal)
+            ? entry.Label + T(" · 缺少完整的棋盘记录", " · Board recording incomplete") : entry.Label;
     }
 
     internal void Close()

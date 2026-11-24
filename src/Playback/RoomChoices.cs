@@ -15,14 +15,21 @@ namespace SpireReplay.Playback;
 // Room checkpoints restore the original native presentation. Apply a decision
 // only when both the recorded index and the durable option ID match that room.
 internal sealed class RoomChoices(RunState run, IReadOnlyList<ReplayEvent> timeline, bool inEventBattle,
-    Func<int, Action, string, Task> presentGrid)
+    Func<int, Action, string, Task> presentGrid, Func<Func<bool>, Task> wait, Func<double, Task> present)
 {
     private readonly RewardChoices rewards = new();
     private readonly HashSet<int> appliedMarkers = [];
+    private CrystalSpherePlayback? crystal;
 
     internal Task<bool> ApplyAsync(int index)
     {
         var entry = timeline[index];
+        if (run.CurrentRoom is EventRoom { CanonicalEvent: CrystalSphere } sphere &&
+            entry.Kind is "event" or "crystal" or "crystal-board" or "reward")
+        {
+            crystal ??= new CrystalSpherePlayback(sphere, timeline, rewards, wait, present);
+            return crystal.ApplyAsync(index);
+        }
         if (appliedMarkers.Contains(index))
             return Task.FromResult(true);
         if (entry.Kind == "direct-event")
