@@ -1,6 +1,9 @@
 using Godot;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Entities.Players;
+using MegaCrit.Sts2.Core.Commands;
+using MegaCrit.Sts2.Core.Entities.Merchant;
+using MegaCrit.Sts2.Core.Nodes.Events.Custom;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Models.Characters;
 using MegaCrit.Sts2.Core.Models.Events;
@@ -25,7 +28,7 @@ internal static class CourierAcceptance
     private static string Receipt => Path.Combine(System.Environment.GetEnvironmentVariable("SPIRE_REPLAY_TEST")!, "courier-result.txt");
     private static string Potions(Player player) => string.Join('|', player.PotionSlots.Select(p => p?.Id.ToString() ?? "-"));
 
-    internal static async Task RecordAsync(NGame game)
+    internal static async Task RecordAsync(NGame game, bool merchant = false)
     {
         SaveManager.Instance.Progress.EnableFtues = false;
         var hero = ModelDb.Character<Ironclad>();
@@ -36,6 +39,29 @@ internal static class CourierAcceptance
         var run = await game.StartNewSingleplayerRun(hero, true, ActModel.GetDefaultList(), [], Seed, GameMode.Standard);
 #endif
         var player = run.Players.Single();
+        if (merchant)
+        {
+            await PlayerCmd.GainGold(250, player);
+            await CrystalSphereAcceptance.ReachActTwoEventAsync(run, player, ModelDb.Event<FakeMerchant>());
+            var view = NEventRoom.Instance!.FindChildren("*", "", true, false).OfType<NFakeMerchant>().Single();
+            view.Call(NFakeMerchant.MethodName.OpenInventory);
+            var inventory = view.Inventory.Inventory!;
+            var item = inventory.AllEntries.OfType<MerchantRelicEntry>().First(i => i.IsStocked && i.EnoughGold);
+            var beforeGold = player.Gold;
+            var id = item.Model!.Id.ToString();
+            var buy = AccessTools.Method(typeof(MerchantEntry), "OnTryPurchaseUnsynchronized") ?? AccessTools.Method(typeof(MerchantEntry), "OnTryPurchaseWrapper");
+            if (!await (Task<bool>)buy.Invoke(item,[inventory,false])! || beforeGold <= player.Gold || !player.Relics.Any(r => r.Id.ToString() == id))
+                throw new InvalidDataException("The original merchant purchase failed.");
+            AccessTools.Method(view.Inventory.GetType(), "Close").Invoke(view.Inventory, null);
+            var expectedGold = player.Gold;
+            await game.ReturnToMainMenu();
+            ReplayStore.Flush();
+            var saved = ReplayStore.ListRuns().First(r => r.Seed == Seed && r.Rooms.Any(x => ReplayStore.LoadEvents(r.Id,x.Index).Any(e => e.Kind == "shop" && e.ActionKey == id)));
+            var visitIndex = saved.Rooms.Last(x => ReplayStore.LoadEvents(saved.Id,x.Index).Any(e => e.Kind == "shop" && e.ActionKey == id)).Index;
+            File.WriteAllLines(Receipt+".merchant",[saved.Id,visitIndex.ToString(),id,expectedGold.ToString()]);
+            GD.Print("REPLAY_MERCHANT_RECORD_PASS");
+            return;
+        }
         await CrystalSphereAcceptance.ReachActTwoEventAsync(run, player, ModelDb.Event<PotionCourier>());
         var model = ((EventRoom)run.CurrentRoom!).LocalMutableEvent;
         var choice = model.CurrentOptions.Select((value, index) => (value,index)).Single(o => o.value.TextKey.EndsWith("GRAB_POTIONS"));
@@ -56,6 +82,20 @@ internal static class CourierAcceptance
         var visit = info.Rooms.Single(x => ReplayStore.LoadEvents(info.Id,x.Index).Any(e => e.ActionKey == choice.value.TextKey));
         File.WriteAllLines(Receipt,[info.Id,visit.Index.ToString(),after]);
         GD.Print("REPLAY_COURIER_RECORD_PASS");
+    }
+
+    internal static async Task WatchMerchantAsync()
+    {
+        var expected = File.ReadAllLines(Receipt+".merchant");
+        var data = ReplayStore.LoadRoom(expected[0],int.Parse(expected[1]));
+        await ReplayPlayer.PlayRoomAsync(data.Checkpoint!,data.Events);
+        ReplayPlayer.SetSpeed(4);
+        await JourneyAcceptance.Wait(() => ReplayPlayer.IsFinished, "fake merchant purchase");
+        var player = RunManager.Instance.DebugOnlyGetState()!.Players.Single();
+        if (ReplayPlayer.HasError || player.Gold != int.Parse(expected[3]) || !player.Relics.Any(r => r.Id.ToString() == expected[2]))
+            throw new InvalidDataException("Replay merchant inventory or price differed.");
+        await ReplayPlayer.StopAsync();
+        GD.Print("REPLAY_MERCHANT_WATCH_PASS");
     }
 
     internal static async Task WatchAsync()

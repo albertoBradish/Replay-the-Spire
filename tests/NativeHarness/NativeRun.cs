@@ -86,6 +86,8 @@ public static class NativeRun
             else if (phase == "event-battle-watch") await EventBattleAcceptance.WatchAsync();
             else if (phase == "event-grid-record") await EventGridAcceptance.RecordAsync(game);
             else if (phase == "event-grid-watch") await EventGridAcceptance.WatchAsync();
+            else if (phase == "merchant-record") await CourierAcceptance.RecordAsync(game, merchant: true);
+            else if (phase == "merchant-watch") await CourierAcceptance.WatchMerchantAsync();
             else if (phase == "courier-record") await CourierAcceptance.RecordAsync(game);
             else if (phase == "courier-watch") await CourierAcceptance.WatchAsync();
             else if (phase == "crystal-record") await CrystalSphereAcceptance.RecordAsync(game);
