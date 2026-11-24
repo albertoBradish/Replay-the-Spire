@@ -66,7 +66,7 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
     internal int Turn => RoomEvents != null ? 0 : CombatManager.Instance.DebugOnlyGetState()?.RoundNumber ?? lastTurn;
     internal string Status { get; private set; } = "正在载入战斗";
 
-    internal async Task StartAsync(bool warmAct)
+    internal async Task StartAsync()
     {
         var run = RunState.FromSerializable(Replay.serializableRun);
         var player = run.Players.Single();
@@ -75,11 +75,8 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
         manager.CombatStateSynchronizer.IsDisabled = true;
         manager.CombatReplayWriter.IsEnabled = false;
 
-        if (!warmAct)
-        {
-            await PreloadManager.LoadRunAssets([player.Character]);
-            await PreloadManager.LoadActAssets(run.Act);
-        }
+        await PreloadManager.LoadRunAssets([player.Character]);
+        await PreloadManager.LoadActAssets(run.Act);
         CheckActive();
         manager.Launch();
         NAudioManager.Instance?.StopMusic();

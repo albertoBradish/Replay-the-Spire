@@ -88,8 +88,6 @@ public static class ReplayPlayer
 
     internal static void AdvanceToPhoto(int decision) => current?.AdvanceToPhoto(decision);
 
-    internal static bool ExportingPhotos { get; set; }
-
     public static void Step() => current?.Step();
 
     private static async Task StartAsync(byte[] data, int turn, int decision, IReadOnlyList<ReplayEvent>? roomEvents,
@@ -113,43 +111,8 @@ public static class ReplayPlayer
                     throw new InvalidDataException("需要单人房间记录。");
                 replay = new CombatReplay { serializableRun = save };
             }
-            bool warmAct = false;
-#if !BETA
-            bool directSwitch = false;
-#endif
-            if (current is { } previous)
-            {
-#if !BETA
-                // The beta card pool can enqueue a second deferred return when its
-                // scene is replaced directly. Use its normal menu teardown instead.
-                if (ExportingPhotos && previous.Ready && RunManager.Instance.IsInProgress)
-                {
-                    var oldSave = previous.Replay.serializableRun;
-                    var nextSave = replay.serializableRun;
-                    warmAct = oldSave.CurrentActIndex == nextSave.CurrentActIndex &&
-                        oldSave.Players[0].CharacterId == nextSave.Players[0].CharacterId &&
-                        oldSave.Acts[oldSave.CurrentActIndex].Id == nextSave.Acts[nextSave.CurrentActIndex].Id;
-                    directSwitch = true;
-                    previous.Cancel();
-                    // Card visuals can still have deferred pool returns after the logic
-                    // reaches a decision. Let the old room finish before opening another.
-                    var tree = game.GetTree();
-                    double scale = Engine.TimeScale;
-                    try
-                    {
-                        Engine.TimeScale = 4;
-                        await game.ToSignal(tree.CreateTimer(.65, true, false), SceneTreeTimer.SignalName.Timeout);
-                    }
-                    finally { Engine.TimeScale = scale; }
-                    RunManager.Instance.CleanUp();
-                    // Detach the old run's nodes before the new singletons are attached.
-                    game.RootSceneContainer.SetCurrentScene(new Control());
-                    await game.ToSignal(game.GetTree(), SceneTree.SignalName.ProcessFrame);
-                }
-                else
-#endif
-                    await CloseAsync();
-            }
+            if (current != null)
+                await CloseAsync();
             // Returning to the menu schedules this native preload without awaiting
             // its completion. Its worker must release shared assets before relaunch.
             await menuAssets;
@@ -160,19 +123,11 @@ public static class ReplayPlayer
             try
             {
                 ReplaySandbox.Enter();
-                await session.StartAsync(warmAct);
+                await session.StartAsync();
             }
             catch
             {
-#if !BETA
-                if (directSwitch && !RunManager.Instance.IsInProgress && game.MainMenu == null)
-                {
-                    OnRunCleanedUp();
-                    await game.ReturnToMainMenu();
-                }
-                else
-#endif
-                    await CloseAsync();
+                await CloseAsync();
                 throw;
             }
         }
