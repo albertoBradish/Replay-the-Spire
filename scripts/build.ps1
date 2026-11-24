@@ -28,7 +28,7 @@ if ((Test-Path -LiteralPath (Join-Path $root '.git')) -and (Get-Command git -Err
         $changes = git -C $root status --porcelain -- @sources
         $versionStamp = $manifest.version + '+' + $revision
         if ($changes) { $versionStamp += '.dirty' }
-        $buildFlags += "-p:InformationalVersion=$versionStamp", '-p:IncludeSourceRevisionInInformationalVersion=false'
+        $buildFlags += "-p:InformationalVersion=$versionStamp", "-p:SourceRevisionId=$revision", "-p:EnableSourceLink=false", '-p:IncludeSourceRevisionInInformationalVersion=false'
     }
 }
 dotnet build (Join-Path $root 'src/SpireReplay.csproj') -c Release --artifacts-path $build @buildFlags --nologo
