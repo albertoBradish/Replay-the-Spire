@@ -86,6 +86,8 @@ public static class ReplayPlayer
         current?.RefreshClock();
     }
 
+    internal static void AdvanceToPhoto(int decision) => current?.AdvanceToPhoto(decision);
+
     public static void Step() => current?.Step();
 
     private static async Task StartAsync(byte[] data, int turn, int decision, IReadOnlyList<ReplayEvent>? roomEvents,

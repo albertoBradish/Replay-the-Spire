@@ -559,14 +559,14 @@ internal sealed class ReplayBrowser
             toolbar.Show();
             try
             {
-                if (!forumAlbum) await toolbar.OpenRoomAsync(target, turn, decision);
+                if (!forumAlbum && !captureAlbum) await toolbar.OpenRoomAsync(target, turn, decision);
                 if (captureAlbum || forumAlbum)
                 {
-                    string? result = null;
+                    string result;
                     try
                     {
                         if (forumAlbum) result = await toolbar.CaptureForumAsync();
-                        else await toolbar.CaptureAlbumAsync();
+                        else result = await toolbar.CaptureAlbumAsync();
                     }
                     finally
                     {
@@ -575,8 +575,7 @@ internal sealed class ReplayBrowser
                     }
                     busy = false;
                     Window.Show();
-                    if (result != null) ReportExport(result);
-                    else Export(() => Gallery.Export(selected.Id, target.Index));
+                    ReportExport(result);
                     return;
                 }
             }

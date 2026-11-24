@@ -92,6 +92,32 @@ public static class NativeRun
             else if (phase == "courier-watch") await CourierAcceptance.WatchAsync();
             else if (phase == "crystal-record") await CrystalSphereAcceptance.RecordAsync(game);
             else if (phase == "crystal-watch") await CrystalSphereAcceptance.WatchAsync();
+            else if (phase == "sample-album")
+            {
+                string id = ReplayStore.Import(System.Environment.GetEnvironmentVariable("SPIRE_REPLAY_SAMPLE")!);
+                var run = ReplayStore.ListRuns().Single(r => r.Id == id);
+                // Run this file without changing its original mod fingerprint in storage.
+                // The test-only assembly adds no content to the original game simulation.
+                var type = typeof(ReplayPlayer).Assembly.GetType("SpireReplay.Interface.ReplayToolbar", true)!;
+                var toolbar = Activator.CreateInstance(type, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance,
+                    null, [game.GetTree(),run,run.Rooms.First(),false], null)!;
+                AccessTools.Method(type,"Show").Invoke(toolbar,null);
+                var timer = System.Diagnostics.Stopwatch.StartNew();
+                try
+                {
+                    var index = await (Task<string>)AccessTools.Method(type,"CaptureForumAsync").Invoke(toolbar,null)!;
+                    long first = timer.ElapsedMilliseconds;
+                    timer.Restart();
+                    var reused = await (Task<string>)AccessTools.Method(type,"CaptureForumAsync").Invoke(toolbar,null)!;
+                    if (reused != index) throw new InvalidDataException("Unchanged recording was rendered twice.");
+                    GD.Print($"REPLAY_SAMPLE_ALBUM_PASS ms={first} repeatMs={timer.ElapsedMilliseconds} index={index}");
+                }
+                finally
+                {
+                    if (ReplayPlayer.IsActive) await ReplayPlayer.StopAsync();
+                    AccessTools.Method(type,"Remove").Invoke(toolbar,null);
+                }
+            }
             else if (phase == "forum-album") await UiAcceptance.ForumAsync();
             else if (phase is "campaign-album" or "campaign-film")
             {

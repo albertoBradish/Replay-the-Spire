@@ -52,12 +52,7 @@ internal sealed class RoomChoices(RunState run, IReadOnlyList<ReplayEvent> timel
                 map.Open();
                 map.SetTravelEnabled(false);
                 var point = new MapCoord(column, row);
-                var ping = AccessTools.Method(typeof(NMapScreen), "PingMapCoord", [typeof(MapCoord), typeof(Player)]);
-                if (ping != null)
-                    ping.Invoke(map, [point, run.Players[0]]);
-                else
-                    AccessTools.Method(typeof(NMapScreen), "PingMapCoord", [typeof(Player), typeof(MapCoord)])
-                        ?.Invoke(map, [run.Players[0], point]);
+                Ping(map, point, run.Players[0]);
                 return Task.FromResult(true);
             }
         }
@@ -84,6 +79,16 @@ internal sealed class RoomChoices(RunState run, IReadOnlyList<ReplayEvent> timel
         else
             while (start > 0 && timeline[start - 1].Kind == "choice") start--;
         return ApplyWithChildrenAsync(index, start, end, markCompleted: false);
+    }
+
+    internal static void Ping(NMapScreen map, MapCoord point, Player player)
+    {
+        var ping = AccessTools.Method(typeof(NMapScreen), "PingMapCoord", [typeof(MapCoord), typeof(Player)]);
+        if (ping != null)
+            ping.Invoke(map, [point, player]);
+        else
+            AccessTools.Method(typeof(NMapScreen), "PingMapCoord", [typeof(Player), typeof(MapCoord)])
+                ?.Invoke(map, [player, point]);
     }
 
     private async Task<bool> ApplyRewardAsync(ReplayEvent entry, ReplayEvent? next)

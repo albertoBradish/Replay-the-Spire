@@ -26,8 +26,15 @@ try
     Check(data.Events[0].DecisionSeconds == 1.25 && data.Events[1].Amount == 6, "event fields");
     Check(data.Combat!.SequenceEqual(new byte[] { 2, 3, 5 }) && data.Checkpoint![1] == 11, "native room payloads");
     var album = Gallery.Export(run.Id, -1);
-    Check(File.ReadAllText(album).Contains("timeline-001.svg") &&
-        File.ReadAllText(Path.Combine(Gallery.FrameDirectory(run.Id, 1), "timeline-001.svg")).Contains("&lt;"), "gallery escaping");
+    Check(File.ReadAllText(album).Contains("<svg") && File.ReadAllText(album).Contains("&lt;"), "inline gallery escaping");
+    Check(Directory.EnumerateFileSystemEntries(Path.GetDirectoryName(album)!).Select(Path.GetFileName).Order()
+        .SequenceEqual(["images", "index.html", "index.txt"]), "flat gallery layout");
+    string key = AlbumIndex.Key(run.Id, -1, "test", CancellationToken.None);
+    var published = Path.GetDirectoryName(album)!;
+    AlbumIndex.Remember(key, published);
+    Check(AlbumIndex.Find(key, CancellationToken.None) == album, "reuse validated album");
+    File.AppendAllText(Path.Combine(published, "index.txt"), "Personal edit");
+    Check(AlbumIndex.Find(key, CancellationToken.None) == null, "preserve edited albums");
     File.AppendAllText(Path.Combine(ReplayStore.LibraryDirectory, run.Id, "room-0000.jsonl"), "{");
     Check(ReplayStore.LoadEvents(run.Id, 0).Count == 2, "recover final interrupted record");
     string file = ReplayStore.Export(run.Id);

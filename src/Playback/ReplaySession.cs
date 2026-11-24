@@ -34,6 +34,7 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
     private bool seeking = targetTurn > 0 || targetDecision >= 0;
     private bool stepToNext;
     private int stepFrom;
+    private int? nextPhotoDecision;
     private DecisionCaption? caption;
     private Task eventLayout = Task.CompletedTask;
     private readonly BattleTimeline timeline = new(combatTimeline);
@@ -153,10 +154,17 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
         if (!Ready || Closing || Finished)
             return;
         stepToNext = false;
+        nextPhotoDecision = null;
         seeking = false;
         Paused = paused;
         Status = paused ? "已暂停" : "播放中";
         RefreshClock();
+    }
+
+    internal void AdvanceToPhoto(int decision)
+    {
+        SetPaused(false);
+        nextPhotoDecision = decision;
     }
 
     internal void Step()
@@ -227,7 +235,7 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
                     lastTurn = Turn;
                     bool atTarget = seeking && (targetTurn > 0 && Turn >= targetTurn ||
                         targetDecision >= 0 && Decision + 1 >= targetDecision);
-                    if (atTarget || stepToNext && Decision > stepFrom)
+                    if (atTarget || stepToNext && Decision > stepFrom || nextPhotoDecision <= Decision + 1)
                         SetPaused(true);
                 }
                 await Until(() => true);
@@ -353,7 +361,7 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
             if (prepared >= index) return;
             prepared = index;
             var entry = timeline[index];
-            if (seeking && targetDecision >= 0 && Decision + 1 >= targetDecision || stepToNext && Decision > stepFrom)
+            if (nextPhotoDecision <= Decision + 1 || seeking && targetDecision >= 0 && Decision + 1 >= targetDecision || stepToNext && Decision > stepFrom)
             {
                 SetPaused(true);
                 Status = $"第 {Decision + 1} 个节点 · {entry.Label}";

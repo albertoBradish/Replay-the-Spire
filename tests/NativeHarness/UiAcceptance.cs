@@ -63,12 +63,14 @@ internal static class UiAcceptance
             var html = await File.ReadAllTextAsync(Path.Combine(folder, "index.html"));
             var post = await File.ReadAllTextAsync(Path.Combine(folder, "index.txt"));
             int combat = 0, noncombat = 0, annotated = 0;
+            var entries = Directory.EnumerateFileSystemEntries(folder).Select(Path.GetFileName).Order(StringComparer.Ordinal);
+            if (!entries.SequenceEqual(new[] { "images", "index.html", "index.txt" }))
+                throw new InvalidDataException("Unexpected files in the published album.");
             int roomNumber = 0;
             foreach (var entry in run.Rooms)
             {
                 roomNumber++;
-                var roomDir = Path.Combine(folder, $"room-{entry.Index:D4}");
-                if (!Directory.Exists(roomDir) || !post.Contains($"第 {entry.Floor} 层"))
+                if (!post.Contains($"第 {entry.Floor} 层"))
                     throw new InvalidDataException($"Journal skipped room {entry.Index}");
                 var tracks = ReplayStore.LoadEvents(run.Id, entry.Index);
                 var photos = Directory.GetFiles(Path.Combine(folder, "images"), $"{roomNumber:D3}-*").Order(StringComparer.Ordinal).ToArray();
@@ -194,19 +196,18 @@ internal static class UiAcceptance
                 if (browser.FindChild(name, true, false) is not Control widget || !widget.IsVisibleInTree() || !bounds.Encloses(widget.GetGlobalRect()))
                     throw new InvalidDataException("1280×720 library control not reachable: " + name);
             if (capture.Disabled) throw new InvalidDataException("Capture button disabled");
-            string folder = Gallery.FrameDirectory(runId, roomIndex);
-            var before = Directory.GetFiles(folder, "auto-*.png").ToDictionary(f => f, File.GetLastWriteTimeUtc);
+            var before = Directory.GetDirectories(ReplayStore.ExportsDirectory, "Replay-*").ToHashSet();
             capture.EmitSignal(BaseButton.SignalName.Pressed);
             await Wait(() => !browser.Visible, "start album");
             await Wait(() => browser.Visible && !ReplayPlayer.IsActive, "finish album playback", 120);
             var status = (Label)browser.FindChild("ExportStatus", true, false);
             var open = (Button)browser.FindChild("OpenExportFolder", true, false);
             await Wait(() => open.Visible, "album export: " + status.Text);
-            string htmlPath = Path.Combine(Path.GetDirectoryName(folder)!, $"room-{roomIndex:D4}.html");
+            string folder = Directory.GetDirectories(ReplayStore.ExportsDirectory, "Replay-*").Single(f => !before.Contains(f));
+            string htmlPath = Path.Combine(folder, "index.html");
             string html = await File.ReadAllTextAsync(htmlPath);
-            var pngs = Directory.GetFiles(folder, "auto-*.png")
-                .Where(f => !before.TryGetValue(f, out var stamp) || File.GetLastWriteTimeUtc(f) > stamp).ToArray();
-            if (pngs.Length < 2) throw new InvalidDataException("Fewer than two fresh native album frames");
+            var pngs = Directory.GetFiles(Path.Combine(folder, "images"), "*.jpg");
+            if (pngs.Length == 0) throw new InvalidDataException("Missing representative room photos");
             foreach (string png in pngs)
             {
                 using var image = Image.LoadFromFile(png);
@@ -216,7 +217,7 @@ internal static class UiAcceptance
                     select image.GetPixel(x * image.GetWidth() / 12, y * image.GetHeight() / 8).Luminance;
                 if (levels.Max() - levels.Min() < 0.07f) throw new InvalidDataException($"Blank gallery capture: {png}");
             }
-            GD.Print($"REPLAY_ALBUM_PASS {pngs.Length} native PNGs and {htmlPath}");
+            GD.Print($"REPLAY_ALBUM_PASS {pngs.Length} native photos and {htmlPath}");
             var timeline = (ItemList)browser.FindChild("FloorTimeline", true, false);
             var events = ReplayStore.LoadEvents(run.Id, roomIndex);
             var filter = (OptionButton)browser.FindChild("TimelineFilter", true, false);

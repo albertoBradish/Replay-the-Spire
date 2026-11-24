@@ -21,6 +21,8 @@
 | 贴吧直播贴 | **生成整局直播贴** | 按顺序排列的游戏截图、可复制的贴文、可离线打开的图集 |
 | 只整理一场战斗 | 选择楼层生成截图或决策图集 | 本层图片与时间线 |
 
+图集目录中只有 `index.html`、`index.txt` 和 `images/`。再次导出同一份记录时会校验并打开已有图集；玩家编辑过的贴文会保留，重新生成的图集另存。
+
 游戏完成一局后会自动生成可分享的回放文件。回放库和导出目录位于游戏用户目录内的 `ReplayTheSpire` 与 `ReplayTheSpire/exports`。安装文件夹通常只有模组本体。接收者要在相同游戏构建、相同模组版本与加载顺序下重演战斗；版本不同时仍可阅读时间线与统计。
 
 有声 MP4 使用 Windows 的进程音频采集和 FFmpeg。Windows 10 2004（build 19041）及以上的 64 位系统会在导出时尝试采集游戏原声，已在 Windows 11 实机验证。首次导出时可以在游戏内安装编码器或选择自己的 `ffmpeg.exe`。普通游玩和原生回放无需安装编码器。导出期间会显示楼层和进度，可以取消。游戏已静音时，可选择按静音设置导出，或仅为本次视频以 25% 音量播放并导出原声。[Windows 进程音频采集说明](https://learn.microsoft.com/en-us/samples/microsoft/windows-classic-samples/applicationloopbackaudio-sample/) · [OBS 的系统兼容说明](https://obsproject.com/kb/application-audio-capture-guide/) · [FFmpeg Windows 构建来源](https://ffmpeg.org/download.html)
