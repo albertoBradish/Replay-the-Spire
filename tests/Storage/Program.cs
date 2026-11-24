@@ -39,6 +39,9 @@ try
     File.Copy(file, bad);
     using (var zip = ZipFile.Open(bad, ZipArchiveMode.Update)) zip.CreateEntry("../out");
     try { ReplayStore.Import(bad); throw new Exception("unexpected entry accepted"); } catch (InvalidDataException) { }
+    File.Copy(file, bad, overwrite: true);
+    using (var zip = ZipFile.Open(bad, ZipArchiveMode.Update)) zip.GetEntry("room-0000.mcr")!.Delete();
+    try { ReplayStore.Import(bad); throw new Exception("missing indexed combat accepted"); } catch (InvalidDataException) { }
     Console.WriteLine("STORAGE_PASS");
 }
 finally { Directory.Delete(temp, recursive: true); }

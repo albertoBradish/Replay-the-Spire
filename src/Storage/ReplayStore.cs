@@ -39,7 +39,7 @@ public static class ReplayStore
         }
     }
 
-    static string RunPath(string id)
+    internal static string RunPath(string id)
     {
         if (id.Length != 32 || !id.All(char.IsAsciiHexDigit)) throw new InvalidDataException("Invalid run ID.");
         return Path.Combine(root, id);
@@ -301,6 +301,13 @@ public static class ReplayStore
         ValidateIndex(info);
         var allowed = RunFiles(info).ToHashSet(StringComparer.Ordinal);
         if (archive.Entries.Any(e => !allowed.Remove(e.FullName))) throw new InvalidDataException("Unexpected or duplicate entry.");
+        foreach (var recorded in info.Rooms)
+        {
+            string stem = $"room-{recorded.Index:D4}";
+            if ((recorded.HasCombat && archive.GetEntry(stem + ".mcr") is not { Length: > 0 }) ||
+                (recorded.HasCheckpoint && archive.GetEntry(stem + ".checkpoint") is not { Length: > 0 }))
+                throw new InvalidDataException($"Missing data for floor {recorded.Floor}.");
+        }
         lock (Gate)
         {
             var dest = RunPath(info.Id);
