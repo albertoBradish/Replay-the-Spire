@@ -86,6 +86,8 @@ public static class NativeRun
             else if (phase == "event-battle-watch") await EventBattleAcceptance.WatchAsync();
             else if (phase == "event-grid-record") await EventGridAcceptance.RecordAsync(game);
             else if (phase == "event-grid-watch") await EventGridAcceptance.WatchAsync();
+            else if (phase == "crystal-record") await CrystalSphereAcceptance.RecordAsync(game);
+            else if (phase == "crystal-watch") await CrystalSphereAcceptance.WatchAsync();
             else if (phase == "forum-album") await UiAcceptance.ForumAsync();
             else if (phase is "campaign-album" or "campaign-film")
             {
