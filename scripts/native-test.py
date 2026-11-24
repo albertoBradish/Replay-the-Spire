@@ -13,7 +13,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
 parser.add_argument("game", type=Path)
-parser.add_argument("phase", choices=["prepare", "record", "watch", "journey-record", "journey-watch", "video-room", "video-run", "video-cancel", "video-hd", "video-sync", "video-muted-mix", "video-muted", "timing", "timing-watch", "campaign-record", "campaign-watch", "campaign-album", "campaign-film", "characters-record", "characters-watch", "modded-record", "modded-watch", "control", "choices-record", "choices-watch", "damage-record", "reward-record", "reward-watch", "facilities-record", "facilities-watch", "event-battle-record", "event-battle-watch", "resume-record", "resume-watch", "transfer", "foreign-transfer", "forum-album", "manual"])
+parser.add_argument("phase", choices=["prepare", "record", "watch", "journey-record", "journey-watch", "video-room", "video-run", "video-cancel", "video-hd", "video-sync", "video-muted-mix", "video-muted", "timing", "timing-watch", "campaign-record", "campaign-watch", "ordinary-record", "ordinary-watch", "campaign-album", "campaign-film", "characters-record", "characters-watch", "modded-record", "modded-watch", "control", "choices-record", "choices-watch", "damage-record", "reward-record", "reward-watch", "facilities-record", "facilities-watch", "event-battle-record", "event-battle-watch", "resume-record", "resume-watch", "transfer", "foreign-transfer", "forum-album", "manual"])
 parser.add_argument("--name", default="acceptance")
 parser.add_argument("--candidate", type=Path, help="Stage and test this exact packaged plugin directory")
 parser.add_argument("--extra-mod", type=Path, action="append", default=[], help="Copy an optional local mod into a new isolated test session")
@@ -174,7 +174,7 @@ with log.open("wb") as stream:
     if manual:
         raise SystemExit(0)
     try:
-        proc.wait(timeout=2700 if args.phase.startswith("campaign-") else 900 if args.phase in ("video-run", "forum-album") else 260)
+        proc.wait(timeout=2700 if args.phase.startswith(("campaign-", "ordinary-")) else 900 if args.phase in ("video-run", "forum-album") else 260)
     except subprocess.TimeoutExpired:
         proc.terminate()
         proc.wait(timeout=15)

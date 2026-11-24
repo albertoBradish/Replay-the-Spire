@@ -14,6 +14,7 @@ parser.add_argument("--candidate", type=Path, help="Use the exact DLL from this 
 parser.add_argument("--ffmpeg", type=Path, help="Enable media tests with this FFmpeg executable")
 parser.add_argument("--foreign-replay", type=Path, help="Verify read-only browsing of a file recorded on a different game build")
 parser.add_argument("--campaign", action="store_true", help="Also play and verify a complete native campaign")
+parser.add_argument("--ordinary", action="store_true", help="Measure a standard Ironclad run through its natural outcome")
 parser.add_argument("--campaign-media", action="store_true", help="Also export and inspect the full campaign album and movie")
 parser.add_argument("--validator", type=Path, help="Optional full-log validator accepting LOG --require MARKER --output JSON")
 args = parser.parse_args()
@@ -106,6 +107,8 @@ if args.campaign or args.campaign_media:
         native("campaign-album")
         if args.ffmpeg:
             native("campaign-film")
+if args.ordinary:
+    record_and_watch("ordinary")
 failed = [r["phase"] for r in results if not r["passed"]]
 print(json.dumps(dict(game=version, phases=len(results), failed=failed, report=str(work / "suite.json")), ensure_ascii=True))
 raise SystemExit(bool(failed))

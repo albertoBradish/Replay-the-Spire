@@ -111,6 +111,8 @@ public static class NativeRun
             else if (phase == "characters-record") await CharactersAcceptance.RecordAsync(game);
             else if (phase == "characters-watch") await CharactersAcceptance.WatchAsync();
             else if (phase == "campaign-record") await CampaignAcceptance.RecordAsync(game);
+            else if (phase == "ordinary-record") await OrdinaryAcceptance.RecordAsync(game);
+            else if (phase == "ordinary-watch") await OrdinaryAcceptance.WatchAsync();
             else if (phase == "campaign-watch") await CampaignAcceptance.WatchAsync();
             else if (phase == "video-muted")
             {
