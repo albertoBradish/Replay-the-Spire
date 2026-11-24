@@ -153,7 +153,6 @@ internal static class UiAcceptance
             if (rooms.Selected != target)
                 throw new InvalidDataException($"Library opened room {rooms.Selected}, expected playable room {target}");
             if (!browser.Borderless) throw new InvalidDataException("Duplicate library title bar");
-            browser.Size = new Vector2I(1030, 652); // The library's client size on a 1280×720 window.
             await tree.ToSignal(tree, SceneTree.SignalName.ProcessFrame);
             var metadata = (Label)browser.FindChild("RunMetadata", true, false);
             long bytes = new DirectoryInfo(Path.Combine(ReplayStore.LibraryDirectory, runId)).EnumerateFiles().Sum(f => f.Length);
@@ -162,7 +161,11 @@ internal static class UiAcceptance
             if (!originals.IsVisibleInTree() || originals.Disabled) throw new InvalidDataException("Missing local run folder link");
             await tree.ToSignal(RenderingServer.Singleton, RenderingServer.SignalName.FramePostDraw);
             using (var shot = browser.GetTexture().GetImage())
+            {
+                if (root.Size == new Vector2I(1280, 720) && (shot.GetWidth() is < 980 or > 1150 || shot.GetHeight() is < 580 or > 680))
+                    throw new InvalidDataException($"Unreadable library size {shot.GetSize()}, canvas {root.GetVisibleRect().Size}, subwindow {browser.Size}");
                 shot.SavePng(Path.Combine(System.Environment.GetEnvironmentVariable("SPIRE_REPLAY_TEST")!, "library-720p.png"));
+            }
             var stats = (Button)browser.FindChild("CardTotals", true, false);
             stats.EmitSignal(BaseButton.SignalName.Pressed);
             await Wait(() => browser.FindChild("CardTotalsList", true, false) is ItemList { ItemCount: > 0 }, "card totals");
@@ -179,7 +182,7 @@ internal static class UiAcceptance
             ((Button)browser.FindChild("BackToTimeline", true, false)).EmitSignal(BaseButton.SignalName.Pressed);
             await tree.ToSignal(tree, SceneTree.SignalName.ProcessFrame);
             var capture = (Button)browser.FindChild("CaptureAlbum", true, false);
-            var bounds = new Rect2(Vector2.Zero, browser.Size);
+            var bounds = browser.GetVisibleRect();
             foreach (string name in new[] { "CaptureAlbum", "CaptureRunAlbum", "ExportRoomVideo", "JumpToMoment", "RunMetadata", "OpenRunFolder", "PlayRoom", "RoomPicker" })
                 if (browser.FindChild(name, true, false) is not Control widget || !widget.IsVisibleInTree() || !bounds.Encloses(widget.GetGlobalRect()))
                     throw new InvalidDataException("1280×720 library control not reachable: " + name);
@@ -233,9 +236,15 @@ internal static class UiAcceptance
             foreach (string name in new[] { "PauseReplay", "StepReplay", "PreviousTurn", "NextTurn", "BackToLibrary" })
                 if (!ControlButton(name).IsVisibleInTree() || !root.GetVisibleRect().Encloses(ControlButton(name).GetGlobalRect()))
                     throw new InvalidDataException("Replay control not reachable: " + name);
+            float pausePixels = pause.GetGlobalRect().Size.Y * root.Size.Y / root.GetVisibleRect().Size.Y;
+            if (pausePixels < 30) throw new InvalidDataException($"Small playback control: {pausePixels}px");
             await tree.ToSignal(RenderingServer.Singleton, RenderingServer.SignalName.FramePostDraw);
             using (var shot = root.GetTexture().GetImage())
                 shot.SavePng(Path.Combine(System.Environment.GetEnvironmentVariable("SPIRE_REPLAY_TEST")!, "toolbar-paused.png"));
+            ControlButton("CollapseReplay").EmitSignal(BaseButton.SignalName.Pressed);
+            if (pause.IsVisibleInTree() || !ControlButton("BackToLibrary").IsVisibleInTree()) throw new InvalidDataException("Toolbar did not collapse");
+            ControlButton("CollapseReplay").EmitSignal(BaseButton.SignalName.Pressed);
+            if (!pause.IsVisibleInTree()) throw new InvalidDataException("Toolbar did not expand");
             ControlButton("BackToLibrary").EmitSignal(BaseButton.SignalName.Pressed);
             await Wait(() => Library()?.Visible == true && !ReplayPlayer.IsActive, "return to selected run", 45);
             GD.Print($"REPLAY_LIBRARY_CONTROLS_PASS storage_bytes={bytes}");

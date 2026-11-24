@@ -19,6 +19,16 @@ internal static class ReplayStyle
 
     internal static string T(string zh, string en) => LocManager.Instance?.Language is "zhs" or "zht" ? zh : en;
 
+    // Game controls are laid out in a 1920-wide canvas. Preserve text and target
+    // sizes when it is displayed in a smaller window.
+    internal static float ReadabilityScale(Window root)
+    {
+        var canvas = root.GetVisibleRect().Size;
+        var display = root.Size;
+        if (display.X <= 0 || display.Y <= 0) return 1;
+        return Mathf.Clamp(Mathf.Min(canvas.X / display.X, canvas.Y / display.Y), 1, 3);
+    }
+
     internal static StyleBoxFlat Box(Color fill, Color edge, int insetX = 12, int insetY = 6)
     {
         var box = new StyleBoxFlat { BgColor = fill, BorderColor = edge };

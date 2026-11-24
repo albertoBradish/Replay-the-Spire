@@ -67,6 +67,7 @@ internal sealed class ReplayToolbar
         position.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         head.AddChild(position);
         collapse = Action(T("收起", "Hide"), Toggle);
+        collapse.Name = "CollapseReplay";
         exit = Action(T("返回回放库", "Library"), Leave);
         exit.Name = "BackToLibrary";
         head.AddChild(collapse);
@@ -290,13 +291,18 @@ internal sealed class ReplayToolbar
 
     private void Resize()
     {
-        float width = Math.Max(260, Math.Min(collapsed ? 390 : 660, tree.Root.GetVisibleRect().Size.X - 24));
+        float factor = ReadabilityScale(tree.Root);
+        float width = Math.Max(260, Math.Min(collapsed ? 390 : 660, tree.Root.GetVisibleRect().Size.X / factor - 24));
+        panel.Scale = Vector2.One * factor;
+        panel.PivotOffset = new Vector2(width / 2, 0);
         panel.OffsetLeft = -width / 2;
         panel.OffsetRight = width / 2;
         panel.ResetSize();
         // Keep the anchor width after resetting any extra height from a wrapped toolbar.
         panel.OffsetLeft = -width / 2;
         panel.OffsetRight = width / 2;
+        summary.Scale = Vector2.One * factor;
+        summary.PivotOffset = summary.Size / 2;
     }
 
     private async void Seek(int direction)

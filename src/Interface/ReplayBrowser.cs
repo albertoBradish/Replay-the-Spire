@@ -69,7 +69,7 @@ internal sealed class ReplayBrowser
         runField.SizeFlagsStretchRatio = 1.45f;
         selectors.AddChild(runField);
         selectors.AddChild(roomField);
-        Window.SizeChanged += () => selectors.Columns = Window.Size.X < 650 ? 1 : 2;
+        Window.SizeChanged += () => selectors.Columns = Window.GetVisibleRect().Size.X < 650 ? 1 : 2;
         runField.AddChild(Text(T("对局", "Run"), 14, true));
         runField.AddChild(runs);
         StyleButton(runs);
@@ -113,12 +113,31 @@ internal sealed class ReplayBrowser
     internal void Show()
     {
         tree.Root.AddChild(Window);
-        var screen = tree.Root.Size;
-        int width = Math.Max(320, Math.Min(1030, screen.X - 32));
-        int height = Math.Max(320, Math.Min(760, screen.Y - 68));
-        Window.PopupCentered(new Vector2I(width, height));
+        Window.ContentScaleMode = Window.ContentScaleModeEnum.CanvasItems;
+        Window.ContentScaleStretch = Window.ContentScaleStretchEnum.Fractional;
+        Window.ContentScaleAspect = Window.ContentScaleAspectEnum.Ignore;
+        var size = FitToDisplay();
+        Window.PopupCentered(size);
+        tree.Root.SizeChanged += Resize;
+        Window.TreeExiting += () => tree.Root.SizeChanged -= Resize;
         Reload(initialRun, initialRoom);
         runs.GrabFocus();
+    }
+
+    private Vector2I FitToDisplay()
+    {
+        var parent = tree.Root;
+        float factor = Window.IsEmbedded() ? ReadabilityScale(parent) : 1;
+        var baseSize = new Vector2I(Math.Clamp(parent.Size.X - 32, 280, 1030), Math.Clamp(parent.Size.Y - 68, 300, 760));
+        Window.ContentScaleSize = baseSize;
+        return new Vector2I(Mathf.RoundToInt(baseSize.X * factor), Mathf.RoundToInt(baseSize.Y * factor));
+    }
+
+    private void Resize()
+    {
+        Window.Size = FitToDisplay();
+        var space = Window.IsEmbedded() ? (Vector2I)tree.Root.GetVisibleRect().Size : tree.Root.Size;
+        Window.Position = (space - Window.Size) / 2 + (Window.IsEmbedded() ? Vector2I.Zero : tree.Root.Position);
     }
 
     private void Close()
