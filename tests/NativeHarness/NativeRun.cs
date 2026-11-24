@@ -73,7 +73,8 @@ public static class NativeRun
             var common = await commonAssets.Task.WaitAsync(TimeSpan.FromSeconds(45));
             await common.WaitForCompletion();
             await Settle(1);
-            GD.Print($"[ReplayHarness] window={game.GetTree().Root.Size} render={game.GetTree().Root.GetTexture().GetSize()}");
+            using (var image = game.GetTree().Root.GetTexture().GetImage())
+                GD.Print($"[ReplayHarness] window={game.GetTree().Root.Size} texture={game.GetTree().Root.GetTexture().GetSize()} pixels={image.GetSize()}");
             string phase = System.Environment.GetEnvironmentVariable("SPIRE_REPLAY_PHASE") ?? "record";
             if (phase == "control") GD.Print("REPLAY_CONTROL_PASS");
             else if (phase == "reward-record") await JourneyAcceptance.RewardRecordAsync(game);

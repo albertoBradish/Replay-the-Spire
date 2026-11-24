@@ -20,7 +20,18 @@ if ($out -eq $game -or $out.StartsWith($game + [IO.Path]::DirectorySeparatorChar
     throw 'Select an output directory outside the source installation.'
 }
 $build = Join-Path $root ".local/build/$gameVersion"
-dotnet build (Join-Path $root 'src/SpireReplay.csproj') -c Release --artifacts-path $build "-p:GameDataDir=$data" "-p:GameVersion=$gameVersion" --nologo
+$buildFlags = @("-p:GameDataDir=$data", "-p:GameVersion=$gameVersion")
+if ((Test-Path -LiteralPath (Join-Path $root '.git')) -and (Get-Command git -ErrorAction SilentlyContinue)) {
+    $sources = @('src', 'mod_manifest.json', 'scripts/build.ps1')
+    $revision = git -C $root log -1 --format=%H -- @sources
+    if ($LASTEXITCODE -eq 0 -and $revision -match '^[a-f0-9]{40}$') {
+        $changes = git -C $root status --porcelain -- @sources
+        $versionStamp = $manifest.version + '+' + $revision
+        if ($changes) { $versionStamp += '.dirty' }
+        $buildFlags += "-p:InformationalVersion=$versionStamp", '-p:IncludeSourceRevisionInInformationalVersion=false'
+    }
+}
+dotnet build (Join-Path $root 'src/SpireReplay.csproj') -c Release --artifacts-path $build @buildFlags --nologo
 if ($LASTEXITCODE) { throw "Build failed ($LASTEXITCODE)" }
 [IO.Directory]::CreateDirectory($out) | Out-Null
 $dll = Join-Path $build 'bin/SpireReplay/release/SpireReplay.dll'
