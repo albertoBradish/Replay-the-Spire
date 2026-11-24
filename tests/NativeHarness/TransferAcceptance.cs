@@ -41,6 +41,9 @@ internal static class TransferAcceptance
                 if (picker.ItemCount != 1 || run.Id != expected.Id || run.Build != expected.Build || run.Rooms.Count != expected.Rooms.Count ||
                     (ReplayStore.CheckCompatibility(run) == null) != sameEnvironment)
                     throw new InvalidDataException("Imported run metadata, count or environment failed.");
+                var compatibility = (Label)window.FindChild("ReplayCompatibility", true, false);
+                if (sameEnvironment ? compatibility.IsVisibleInTree() : !ExplainsForeignBuild(compatibility, expected))
+                    throw new InvalidDataException("Missing or incorrect persistent compatibility message after import");
             }
             if (!sameEnvironment)
             {
@@ -71,6 +74,10 @@ internal static class TransferAcceptance
         await ReplayPlayer.StopAsync();
         GD.Print("REPLAY_TRANSFER_PASS");
     }
+
+    private static bool ExplainsForeignBuild(Label label, RunInfo source) => label.IsVisibleInTree() &&
+        label.Text.Contains(source.Build) && label.Text.Contains(GameEnvironment.Build) &&
+        (label.Text.Contains("可查看时间线和卡牌统计") || label.Text.Contains("Timeline and card totals are available"));
 
     private static async Task ReadForeignRun(Window window, ZipArchive source, RunInfo run, RoomInfo battle)
     {
@@ -115,5 +122,7 @@ internal static class TransferAcceptance
         var sourceCard = originalEvents[firstPlay].Card;
         int expectedCount = run.Rooms.Sum(r => ReplayStore.LoadEvents(run.Id, r.Index).Count(e => e.Card == sourceCard));
         if (moments.ItemCount != expectedCount) throw new InvalidDataException("Foreign card detail did not cover the run");
+        if (!ExplainsForeignBuild((Label)window.FindChild("ReplayCompatibility", true, false), run))
+            throw new InvalidDataException("Foreign compatibility reason vanished while inspecting card statistics");
     }
 }

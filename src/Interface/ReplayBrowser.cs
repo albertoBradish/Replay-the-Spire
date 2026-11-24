@@ -19,6 +19,7 @@ internal sealed class ReplayBrowser
     private readonly OptionButton runs = new() { Name = "RunPicker" };
     private readonly OptionButton rooms = new() { Name = "RoomPicker" };
     private readonly Label metadata = Text("", 14, true);
+    private readonly Label compatibility = Text("", 14);
     private readonly Label status = Text("", 14, true);
     private readonly Button openFile;
     private readonly Button openRun;
@@ -85,6 +86,11 @@ internal sealed class ReplayBrowser
         openRun.TooltipText = T("打开这局回放的本地记录", "Open this run’s local replay files");
         openRun.Visible = false;
         info.AddChild(openRun);
+        compatibility.Name = "ReplayCompatibility";
+        compatibility.MouseFilter = Control.MouseFilterEnum.Pass;
+        compatibility.AddThemeColorOverride("font_color", Gold);
+        compatibility.Hide();
+        page.AddChild(compatibility);
         roomField.AddChild(Text(T("楼层", "Floor"), 14, true));
         roomField.AddChild(rooms);
         StyleButton(rooms);
@@ -164,6 +170,7 @@ internal sealed class ReplayBrowser
                 runs.AddItem(T("暂无回放", "No replays yet"));
                 run = null;
                 metadata.Text = "";
+                compatibility.Hide();
                 openRun.Hide();
                 rooms.Clear();
                 rooms.Disabled = true;
@@ -187,6 +194,10 @@ internal sealed class ReplayBrowser
         openRun.Show();
         metadata.Text = $"{T("种子", "Seed")}  {run.Seed}     ·     {T("游戏版本", "Build")}  {run.Build}";
         metadata.TooltipText = metadata.Text;
+        var explanation = ReplayCompatibility.Explain(run, GameEnvironment.Build, GameEnvironment.Mods);
+        compatibility.Visible = explanation.HasValue;
+        compatibility.Text = explanation?.Summary ?? "";
+        compatibility.TooltipText = explanation?.Details ?? "";
         RefreshStorage(run, metadata.Text);
         rooms.Clear();
         foreach (var item in run.Rooms) rooms.AddItem($"{FloorLabel(item)}   {RoomName(item.Name)}");
@@ -245,7 +256,7 @@ internal sealed class ReplayBrowser
         detail.AddChild(bar);
         var activeRun = run;
         var activeRoom = room;
-        string? mismatch = ReplayStore.CheckCompatibility(run);
+        string? mismatch = compatibility.Visible ? compatibility.TooltipText : ReplayStore.CheckCompatibility(run);
         var tour = Action(T("播放整局", "Play run"), () => StartAt(activeRun.Rooms[0], 0, continuous: true), !room.HasCombat);
         tour.Name = "PlayRun";
         tour.Disabled = mismatch != null;
