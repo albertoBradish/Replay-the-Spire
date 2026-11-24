@@ -88,6 +88,8 @@ public static class ReplayPlayer
 
     internal static void AdvanceToPhoto(int decision) => current?.AdvanceToPhoto(decision);
 
+    internal static bool ExportingPhotos { get; set; }
+
     public static void Step() => current?.Step();
 
     private static async Task StartAsync(byte[] data, int turn, int decision, IReadOnlyList<ReplayEvent>? roomEvents,
@@ -111,8 +113,25 @@ public static class ReplayPlayer
                     throw new InvalidDataException("需要单人房间记录。");
                 replay = new CombatReplay { serializableRun = save };
             }
-            if (current != null)
-                await CloseAsync();
+            bool warmAct = false, directSwitch = false;
+            if (current is { } previous)
+            {
+                if (ExportingPhotos && previous.Ready && RunManager.Instance.IsInProgress)
+                {
+                    var oldSave = previous.Replay.serializableRun;
+                    var nextSave = replay.serializableRun;
+                    warmAct = oldSave.CurrentActIndex == nextSave.CurrentActIndex &&
+                        oldSave.Players[0].CharacterId == nextSave.Players[0].CharacterId &&
+                        oldSave.Acts[oldSave.CurrentActIndex].Id == nextSave.Acts[nextSave.CurrentActIndex].Id;
+                    directSwitch = true;
+                    previous.Cancel();
+                    RunManager.Instance.CleanUp(graceful: false);
+                    // Detach the old run's nodes before the new singletons are attached.
+                    game.RootSceneContainer.SetCurrentScene(new Control());
+                    await game.ToSignal(game.GetTree(), SceneTree.SignalName.ProcessFrame);
+                }
+                else await CloseAsync();
+            }
             // Returning to the menu schedules this native preload without awaiting
             // its completion. Its worker must release shared assets before relaunch.
             await menuAssets;
@@ -123,11 +142,16 @@ public static class ReplayPlayer
             try
             {
                 ReplaySandbox.Enter();
-                await session.StartAsync();
+                await session.StartAsync(warmAct);
             }
             catch
             {
-                await CloseAsync();
+                if (directSwitch && !RunManager.Instance.IsInProgress && game.MainMenu == null)
+                {
+                    OnRunCleanedUp();
+                    await game.ReturnToMainMenu();
+                }
+                else await CloseAsync();
                 throw;
             }
         }

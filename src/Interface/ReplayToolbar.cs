@@ -486,10 +486,12 @@ internal sealed class ReplayToolbar
         {
             ReplayPlayer.OriginalTiming = false;
             ReplayPlayer.SetSpeed(8);
+            ReplayPlayer.ExportingPhotos = true;
             await capture(cancellation.Token);
         }
         finally
         {
+            ReplayPlayer.ExportingPhotos = false;
             album = null;
             ReplayPlayer.OriginalTiming = originalTiming;
             ReplayPlayer.SetSpeed(savedSpeed);

@@ -174,7 +174,7 @@ with log.open("wb") as stream:
     if manual:
         raise SystemExit(0)
     try:
-        proc.wait(timeout=2700 if args.phase.startswith(("campaign-", "ordinary-")) else 900 if args.phase in ("video-run", "forum-album") else 260)
+        proc.wait(timeout=2700 if args.phase == "sample-album" or args.phase.startswith(("campaign-", "ordinary-")) else 900 if args.phase in ("video-run", "forum-album") else 260)
     except subprocess.TimeoutExpired:
         proc.terminate()
         proc.wait(timeout=15)
