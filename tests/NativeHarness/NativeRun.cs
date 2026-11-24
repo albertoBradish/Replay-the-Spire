@@ -97,6 +97,7 @@ public static class NativeRun
                 GD.Print("REPLAY_" + phase.Replace('-', '_').ToUpperInvariant() + "_PASS");
             }
             else if (phase == "transfer") await TransferAcceptance.RunAsync(game);
+            else if (phase == "foreign-transfer") await TransferAcceptance.RunAsync(game, false);
             else if (phase == "resume-record") await ResumeAcceptance.ContinueAsync(menu, game);
             else if (phase == "resume-watch") await ResumeAcceptance.WatchAsync();
             else if (phase == "facilities-record") await FacilityAcceptance.RecordAsync(game);
