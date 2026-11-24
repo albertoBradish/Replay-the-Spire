@@ -7,6 +7,15 @@ namespace ReplayHarness;
 
 internal static class UiAcceptance
 {
+    private static string PublishedFolder(Window window, string exports)
+    {
+        var status = ((Label)window.FindChild("ExportStatus", true, false)).Text;
+        int offset = status.IndexOf(exports, StringComparison.OrdinalIgnoreCase);
+        if (offset < 0 || !File.Exists(status[offset..]) || Path.GetFileName(status[offset..]) != "index.html")
+            throw new InvalidDataException(status);
+        return Path.GetDirectoryName(status[offset..])!;
+    }
+
     internal static bool HasLoadedRuns(Window? window) =>
         window is { Visible: true } &&
         window.FindChild("RunPicker", true, false) is OptionButton { Disabled: false, ItemCount: > 0 };
@@ -47,7 +56,7 @@ internal static class UiAcceptance
             var action = (Button)window.FindChild("CaptureRunAlbum", true, false);
             if (action.Disabled) throw new InvalidDataException("Native whole-run photo journal disabled");
             string exports = ReplayStore.ExportsDirectory;
-            var previous = Directory.Exists(exports) ? Directory.GetDirectories(exports, "Replay-*").ToHashSet() : [];
+
             var speed = ReplayPlayer.Speed;
             var timing = ReplayPlayer.OriginalTiming;
             Vector2I sourceSize;
@@ -57,9 +66,7 @@ internal static class UiAcceptance
             await Wait(() => window.Visible && !ReplayPlayer.IsActive, "finish whole-run album", Math.Max(240, run.Rooms.Count * 45));
             if (ReplayPlayer.Speed != speed || ReplayPlayer.OriginalTiming != timing)
                 throw new InvalidDataException("Album changed the viewer's playback controls");
-            var folder = Directory.GetDirectories(exports, "Replay-*").SingleOrDefault(f => !previous.Contains(f));
-            if (folder == null)
-                throw new InvalidDataException(((Label)window.FindChild("ExportStatus", true, false)).Text);
+            var folder = PublishedFolder(window, exports);
             var html = await File.ReadAllTextAsync(Path.Combine(folder, "index.html"));
             var post = await File.ReadAllTextAsync(Path.Combine(folder, "index.txt"));
             int combat = 0, noncombat = 0, annotated = 0;
@@ -196,14 +203,14 @@ internal static class UiAcceptance
                 if (browser.FindChild(name, true, false) is not Control widget || !widget.IsVisibleInTree() || !bounds.Encloses(widget.GetGlobalRect()))
                     throw new InvalidDataException("1280×720 library control not reachable: " + name);
             if (capture.Disabled) throw new InvalidDataException("Capture button disabled");
-            var before = Directory.GetDirectories(ReplayStore.ExportsDirectory, "Replay-*").ToHashSet();
+
             capture.EmitSignal(BaseButton.SignalName.Pressed);
             await Wait(() => !browser.Visible, "start album");
             await Wait(() => browser.Visible && !ReplayPlayer.IsActive, "finish album playback", 120);
             var status = (Label)browser.FindChild("ExportStatus", true, false);
             var open = (Button)browser.FindChild("OpenExportFolder", true, false);
             await Wait(() => open.Visible, "album export: " + status.Text);
-            string folder = Directory.GetDirectories(ReplayStore.ExportsDirectory, "Replay-*").Single(f => !before.Contains(f));
+            string folder = PublishedFolder(browser, ReplayStore.ExportsDirectory);
             string htmlPath = Path.Combine(folder, "index.html");
             string html = await File.ReadAllTextAsync(htmlPath);
             var pngs = Directory.GetFiles(Path.Combine(folder, "images"), "*.jpg");
