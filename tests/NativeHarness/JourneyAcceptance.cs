@@ -207,13 +207,21 @@ public static class JourneyAcceptance
     internal static async Task WinFightAsync(Player who,
         Func<IEnumerable<CardModel>, IEnumerable<CardModel>>? selectCandidates = null)
     {
+        await FightAsync(who, selectCandidates);
+        Require(!who.Creature.IsDead, "won normal encounter");
+    }
+
+    internal static async Task FightAsync(Player who, Func<IEnumerable<CardModel>, IEnumerable<CardModel>>? selectCandidates,
+        int maxActions = 90)
+    {
         var combat = who.Creature.CombatState!;
-        for (int n = 0; n < 90 && CombatManager.Instance.IsInProgress; n++)
+        bool Ended() => who.Creature.IsDead || !CombatManager.Instance.IsInProgress;
+        for (int n = 0; n < maxActions && !Ended(); n++)
         {
-            await Wait(() => !CombatManager.Instance.IsInProgress ||
+            await Wait(() => Ended() ||
                 who.PlayerCombatState?.Phase == PlayerTurnPhase.Play && !CombatManager.Instance.PlayerActionsDisabled &&
                 !RunManager.Instance.ActionExecutor.IsRunning, "reward encounter turn");
-            if (!CombatManager.Instance.IsInProgress) break;
+            if (Ended()) break;
             IEnumerable<CardModel> hand = who.PlayerCombatState!.Hand.Cards;
             if (selectCandidates != null) hand = selectCandidates(hand);
             var enemy = combat.HittableEnemies.OrderBy(e => e.CurrentHp).FirstOrDefault();
@@ -226,16 +234,16 @@ public static class JourneyAcceptance
             {
                 var play = new PlayCardAction(card, attack != null ? enemy : null);
                 RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(play);
-                await Wait(() => play.CompletionTask.IsCompleted || !CombatManager.Instance.IsInProgress, $"turn {combat.RoundNumber} play {card.Id}");
+                await Wait(() => play.CompletionTask.IsCompleted || Ended(), $"turn {combat.RoundNumber} play {card.Id}");
             }
             else
             {
                 int turn = combat.RoundNumber;
                 RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new EndPlayerTurnAction(who, turn));
-                await Wait(() => !CombatManager.Instance.IsInProgress || combat.RoundNumber > turn, "reward encounter enemy turn");
+                await Wait(() => Ended() || combat.RoundNumber > turn, "reward encounter enemy turn");
             }
         }
-        Require(!CombatManager.Instance.IsInProgress && !who.Creature.IsDead, "won normal encounter");
+        if (!Ended()) throw new InvalidDataException($"Combat action budget exhausted on turn {combat.RoundNumber}.");
     }
 
     internal static async Task<CardModel> PlayDiscoveryAsync(Discovery discovery)

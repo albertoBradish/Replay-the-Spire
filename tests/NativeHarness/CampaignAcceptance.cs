@@ -105,7 +105,7 @@ internal static class CampaignAcceptance
         finally { Engine.TimeScale = speed; }
     }
 
-    private sealed class CampaignDriver(RunState run, Player player)
+    internal sealed class CampaignDriver(RunState run, Player player, bool ordinary = false)
     {
         private bool keptCard;
 
@@ -121,8 +121,12 @@ internal static class CampaignAcceptance
             else if (room is CombatRoom)
             {
                 if (CombatManager.Instance.IsInProgress)
-                    await JourneyAcceptance.WinFightAsync(player, CombatCandidates);
-                await JourneyAcceptance.Wait(() => NOverlayStack.Instance?.Peek() is NRewardsScreen ||
+                {
+                    if (ordinary) await JourneyAcceptance.FightAsync(player, hand => OrdinaryAcceptance.ChoosePlay(player, hand), 300);
+                    else await JourneyAcceptance.WinFightAsync(player, CombatCandidates);
+                }
+                if (player.Creature.IsDead) return false;
+                await JourneyAcceptance.Wait(() => player.Creature.IsDead || NOverlayStack.Instance?.Peek() is NRewardsScreen ||
                     NMapScreen.Instance!.IsOpen || run.CurrentRoom != room || CombatManager.Instance.IsInProgress,
                     "post-combat reward or map");
             }
@@ -151,14 +155,32 @@ internal static class CampaignAcceptance
                     await JourneyAcceptance.Wait(() => picking.CurrentRelics is {Count: > 0} &&
                         AccessTools.Field(typeof(NTreasureRoom), "_isRelicCollectionOpen").GetValue(chest) is true,
                         "campaign treasure");
-                    // The single-player skip button opens the map. The chest task
-                    // only finishes when the player chooses a relic or leaves the room.
-                    AccessTools.Method(typeof(NTreasureRoom), "OnProceedButtonPressed").Invoke(chest, [null]);
-                    _ = open.ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
+                    if (ordinary)
+                    {
+                        picking.PickRelicLocally(0);
+                        while (!open.IsCompleted)
+                        {
+                            await JourneyAcceptance.Wait(() => open.IsCompleted || NOverlayStack.Instance?.Peek() is NCardGridSelectionScreen,
+                                "ordinary relic pickup");
+                            if (NOverlayStack.Instance?.Peek() is NCardGridSelectionScreen select) await SelectGridAsync(select);
+                        }
+                        await open;
+                    }
+                    else
+                    {
+                        // Skipping opens the map; the chest task finishes when the player leaves.
+                        AccessTools.Method(typeof(NTreasureRoom), "OnProceedButtonPressed").Invoke(chest, [null]);
+                        _ = open.ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
+                    }
                 }
                 if (!map.IsOpen && NOverlayStack.Instance?.Peek() is not NRewardsScreen) await OpenMapAsync();
             }
-            else if (room is MapRoom or MerchantRoom)
+            else if (room is MerchantRoom merchant)
+            {
+                if (ordinary) await OrdinaryAcceptance.ShopAsync(merchant);
+                await OpenMapAsync();
+            }
+            else if (room is MapRoom)
                 await OpenMapAsync();
             else throw new InvalidDataException("Unhandled native room " + room.GetType().Name);
             return false;
@@ -200,16 +222,22 @@ internal static class CampaignAcceptance
                 .Where(b => b.IsEnabled && b.Reward is {SuccessfullySelected: false}).ToList();
             var gold = options.FirstOrDefault(b => b.Reward is GoldReward);
             if (gold != null) await PressReward(gold);
+            var potion = options.FirstOrDefault(b => b.Reward is PotionReward);
+            if (ordinary && player.HasOpenPotionSlots && potion != null) await PressReward(potion);
             var card = options.FirstOrDefault(b => b.Reward is CardReward);
-            if (!keptCard && card?.Reward is CardReward offer)
+            if ((ordinary || !keptCard) && card?.Reward is CardReward offer)
             {
-                var selecting = PressReward(card);
-                await JourneyAcceptance.Wait(() => NOverlayStack.Instance!.Peek() is NCardRewardSelectionScreen, "campaign card reward");
-                var picker = (NCardRewardSelectionScreen)NOverlayStack.Instance!.Peek()!;
-                var pick = offer.Cards.FirstOrDefault(c => c.Type == CardType.Attack) ?? offer.Cards.First();
-                AccessTools.Method(picker.GetType(), "SelectCard").Invoke(picker, [picker.GetCardHolder(pick)]);
-                await selecting;
-                keptCard = true;
+                var offerPick = ordinary ? OrdinaryAcceptance.ChooseReward(player, offer.Cards) : null;
+                if (offerPick != null || !ordinary)
+                {
+                    var selecting = PressReward(card);
+                    await JourneyAcceptance.Wait(() => NOverlayStack.Instance!.Peek() is NCardRewardSelectionScreen, "campaign card reward");
+                    var picker = (NCardRewardSelectionScreen)NOverlayStack.Instance!.Peek()!;
+                    var pick = offerPick ?? offer.Cards.FirstOrDefault(c => c.Type == CardType.Attack) ?? offer.Cards.First();
+                    AccessTools.Method(picker.GetType(), "SelectCard").Invoke(picker, [picker.GetCardHolder(pick)]);
+                    await selecting;
+                    keptCard = true;
+                }
             }
             AccessTools.Method(screen.GetType(), "OnProceedButtonPressed").Invoke(screen, [null]);
             await JourneyAcceptance.Wait(() => NMapScreen.Instance!.IsOpen || run.CurrentRoom != from ||
@@ -241,7 +269,7 @@ internal static class CampaignAcceptance
             bool ending = model is TheArchitect && chosen.TextKey == "PROCEED";
             NEventRoom.Instance!.OptionButtonClicked(chosen, selected);
             if (ending) return true;
-            await JourneyAcceptance.Wait(() => run.CurrentRoom != room || model.IsFinished || !model.CurrentOptions.Contains(chosen) ||
+            await JourneyAcceptance.Wait(() => player.Creature.IsDead || run.CurrentRoom != room || model.IsFinished || !model.CurrentOptions.Contains(chosen) ||
                 NOverlayStack.Instance?.Peek() != null || NMapScreen.Instance!.IsOpen, "event response " + chosen.TextKey);
             return false;
         }
@@ -270,6 +298,12 @@ internal static class CampaignAcceptance
         var record = ReplayStore.ListRuns().Single(r => r.Id == witness.Run);
         if (record.Result != witness.Result || record.Rooms.Count != witness.Rooms)
             throw new InvalidDataException("Campaign index differs from the completed run.");
+        await WatchRoomsAsync(record, witness.Combats, Report("coverage"));
+        GD.Print("REPLAY_CAMPAIGN_WATCH_PASS");
+    }
+
+    internal static async Task WatchRoomsAsync(RunInfo record, int expectedCombats, string coveragePath)
+    {
         var results = new List<Coverage>();
         foreach (var room in record.Rooms)
         {
@@ -301,12 +335,11 @@ internal static class CampaignAcceptance
             finally
             {
                 if (ReplayPlayer.IsActive) await ReplayPlayer.StopAsync();
-                File.WriteAllText(Report("coverage"), JsonSerializer.Serialize(results, Json));
+                File.WriteAllText(coveragePath, JsonSerializer.Serialize(results, Json));
             }
         }
-        if (results.Any(r => r.Mode != "journal" && !r.Passed) || results.Count(r => r.Mode == "combat") != witness.Combats)
-            throw new InvalidDataException("See campaign-coverage.json for divergent rooms.");
-        GD.Print("REPLAY_CAMPAIGN_WATCH_PASS");
+        if (results.Any(r => r.Mode != "journal" && !r.Passed) || results.Count(r => r.Mode == "combat") != expectedCombats)
+            throw new InvalidDataException("See " + coveragePath + " for divergent rooms.");
     }
 
     private sealed record Visit(int Act, int Floor, string Type, string? Model);
