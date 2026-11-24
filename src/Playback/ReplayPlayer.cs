@@ -113,9 +113,15 @@ public static class ReplayPlayer
                     throw new InvalidDataException("需要单人房间记录。");
                 replay = new CombatReplay { serializableRun = save };
             }
-            bool warmAct = false, directSwitch = false;
+            bool warmAct = false;
+#if !BETA
+            bool directSwitch = false;
+#endif
             if (current is { } previous)
             {
+#if !BETA
+                // The beta card pool can enqueue a second deferred return when its
+                // scene is replaced directly. Use its normal menu teardown instead.
                 if (ExportingPhotos && previous.Ready && RunManager.Instance.IsInProgress)
                 {
                     var oldSave = previous.Replay.serializableRun;
@@ -140,7 +146,9 @@ public static class ReplayPlayer
                     game.RootSceneContainer.SetCurrentScene(new Control());
                     await game.ToSignal(game.GetTree(), SceneTree.SignalName.ProcessFrame);
                 }
-                else await CloseAsync();
+                else
+#endif
+                    await CloseAsync();
             }
             // Returning to the menu schedules this native preload without awaiting
             // its completion. Its worker must release shared assets before relaunch.
@@ -156,12 +164,15 @@ public static class ReplayPlayer
             }
             catch
             {
+#if !BETA
                 if (directSwitch && !RunManager.Instance.IsInProgress && game.MainMenu == null)
                 {
                     OnRunCleanedUp();
                     await game.ReturnToMainMenu();
                 }
-                else await CloseAsync();
+                else
+#endif
+                    await CloseAsync();
                 throw;
             }
         }
