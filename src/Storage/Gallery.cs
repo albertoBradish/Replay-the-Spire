@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace SpireReplay;
 
@@ -25,14 +26,31 @@ public static class Gallery
         var root = Path.GetDirectoryName(FrameDirectory(run.Id, rooms[0].Index))!;
         var html = new StringBuilder("<!doctype html><html lang='zh-CN'><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>回放尖塔 · 对局图集</title><style>body{max-width:960px;margin:32px auto;padding:0 20px;background:#142025;color:#f4ead4;font:16px/1.55 system-ui}img{display:block;max-width:100%;margin:12px 0;border-radius:8px}h1,h2{color:#ebc67f}a{color:inherit}</style><h1>回放尖塔 · 对局图集</h1>");
         html.Append("<p>").Append(Esc(run.Character)).Append(" · ").Append(Esc(run.Seed)).Append("</p>");
+        var post = new StringBuilder().AppendLine($"【回放尖塔】{run.Character} · {run.Seed}");
         foreach (var room in rooms)
         {
             string dir = FrameDirectory(run.Id, room.Index);
             string rel = Path.GetFileName(dir) + "/";
             var events = ReplayStore.LoadEvents(run.Id, room.Index);
             html.Append("<section><h2>").Append(N(room.Floor)).Append("F · ").Append(Esc(room.Name)).Append("</h2>");
+            post.AppendLine().AppendLine($"第 {room.Floor} 层 · {room.Name}");
             foreach (var png in Directory.EnumerateFiles(dir, "*.png").Order(StringComparer.Ordinal))
-                html.Append("<img loading='lazy' alt='游戏画面' src='").Append(rel).Append(Uri.EscapeDataString(Path.GetFileName(png))).Append("'>");
+            {
+                string file = Path.GetFileName(png);
+                var match = Regex.Match(file, @"^auto-(?<action>\d+)-turn-(?<turn>\d+)|^t(?<turn>\d+)-e(?<action>\d+)");
+                string caption = room.Name;
+                if (match.Success)
+                {
+                    int turn = int.Parse(match.Groups["turn"].Value, CultureInfo.InvariantCulture);
+                    int action = int.Parse(match.Groups["action"].Value, CultureInfo.InvariantCulture);
+                    caption = $"第 {turn} 回合 · 动作 {action}";
+                }
+                html.Append("<figure><img loading='lazy' alt='游戏画面' src='").Append(rel)
+                    .Append(Uri.EscapeDataString(file)).Append("'><figcaption>").Append(Esc(caption)).Append("</figcaption></figure>");
+                post.AppendLine($"[图 {rel}{file}] {caption}");
+            }
+            foreach (var ev in events.Where(e => e.Kind is "play" or "auto" or "reward" or "shop" or "camp" or "event"))
+                post.AppendLine((ev.Turn > 0 ? $"第 {ev.Turn} 回合 · " : "") + ev.Label);
             var lines = events.Where(x => x.Kind is not ("turn" or "draw")).ToList();
             if (lines.Count == 0) lines = events;
             const int perPage = 7;
@@ -59,6 +77,7 @@ public static class Gallery
         }
         string index = Path.Combine(root, roomIndex < 0 ? "index.html" : $"room-{roomIndex:D4}.html");
         File.WriteAllText(index, html.ToString(), Encoding.UTF8);
+        File.WriteAllText(Path.ChangeExtension(index, ".txt"), post.ToString(), Encoding.UTF8);
         return index;
     }
 
