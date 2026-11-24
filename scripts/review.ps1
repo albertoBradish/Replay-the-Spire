@@ -24,7 +24,11 @@ if (!(Test-Path -LiteralPath $plugin)) { throw 'The staged replay mod is missing
 $library = Join-Path $profile "appdata/ReplayAcceptance-$GameVersion/ReplayTheSpire"
 if (!(Test-Path -LiteralPath $library)) { throw 'The isolated replay library is missing.' }
 if ($VerifyOnly) {
-    return [pscustomobject]@{ Game=$release.version; Commit=$release.commit; GameDirectory=$runtime; ReplayLibrary=$library; Mod=(Get-FileHash -LiteralPath $plugin -Algorithm SHA256).Hash }
+    $algorithm = [System.Security.Cryptography.SHA256]::Create()
+    $stream = [System.IO.File]::OpenRead($plugin)
+    try { $hash = [BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-', '') }
+    finally { $stream.Dispose(); $algorithm.Dispose() }
+    return [pscustomobject]@{ Game=$release.version; Commit=$release.commit; GameDirectory=$runtime; ReplayLibrary=$library; Mod=$hash }
 }
 if (Get-Process -Name 'SlayTheSpire2' -ErrorAction SilentlyContinue) {
     throw 'Close the running game before opening the review copy.'
