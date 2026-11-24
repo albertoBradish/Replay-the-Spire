@@ -24,6 +24,7 @@ internal sealed class ReplayBrowser
     private readonly Button openFile;
     private readonly Button openRun;
     private readonly Button copyPath;
+    private readonly Button retryCatalog;
     private IReadOnlyList<RunInfo> catalog = [];
     private List<ReplayEvent> events = [];
     private RunInfo? run;
@@ -32,6 +33,10 @@ internal sealed class ReplayBrowser
     private bool busy;
     private bool writingFile;
     private int viewRevision;
+    private int catalogRevision;
+    private int selectionRevision;
+    private int importRevision;
+    private Action? retryRead;
     private readonly string? initialRun;
     private readonly int? initialRoom;
 
@@ -74,7 +79,7 @@ internal sealed class ReplayBrowser
         runField.AddChild(runs);
         StyleButton(runs);
         runs.FitToLongestItem = false;
-        runs.ItemSelected += i => SelectRun((int)i);
+        runs.ItemSelected += i => { selectionRevision++; SelectRun((int)i); };
         var info = Row();
         metadata.Name = "RunMetadata";
         metadata.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
@@ -96,7 +101,7 @@ internal sealed class ReplayBrowser
         StyleButton(rooms);
         rooms.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         rooms.FitToLongestItem = false;
-        rooms.ItemSelected += i => SelectRoom((int)i);
+        rooms.ItemSelected += i => { selectionRevision++; SelectRoom((int)i); };
         var body = Panel(Slate);
         Expand(body);
         page.AddChild(body);
@@ -106,6 +111,9 @@ internal sealed class ReplayBrowser
         status.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         status.Name = "ExportStatus";
         bottom.AddChild(status);
+        retryCatalog = Action(T("重试读取", "Retry loading"), () => retryRead?.Invoke());
+        retryCatalog.Hide();
+        bottom.AddChild(retryCatalog);
         copyPath = Action(T("复制路径", "Copy path"), () => { if (exportedPath != null) DisplayServer.ClipboardSet(exportedPath); });
         copyPath.Visible = false;
         bottom.AddChild(copyPath);
@@ -122,9 +130,8 @@ internal sealed class ReplayBrowser
         Window.Size = size;
         tree.Root.SizeChanged += Resize;
         Window.TreeExiting += () => tree.Root.SizeChanged -= Resize;
-        Reload(initialRun, initialRoom);
         Window.PopupCentered(size);
-        runs.GrabFocus();
+        _ = ReloadAsync(initialRun, initialRoom, selectionRevision);
     }
 
     private Vector2I FitToDisplay()
@@ -156,11 +163,30 @@ internal sealed class ReplayBrowser
         Window.QueueFree();
     }
 
-    private void Reload(string? requestedId, int? requestedRoom = null)
+    private async Task<bool> ReloadAsync(string? requestedId, int? requestedRoom, int requestedSelection)
     {
+        int revision = ++catalogRevision;
+        bool opening = catalog.Count == 0;
+        var originalFocus = Window.GuiGetFocusOwner();
+        retryCatalog.Hide();
+        retryRead = null;
+        if (opening)
+        {
+            runs.Disabled = rooms.Disabled = true;
+            runs.Clear();
+            runs.AddItem(T("正在读取回放…", "Loading replays…"));
+            Clear(detail);
+        }
         try
         {
-            catalog = ReplayStore.ListRuns().OrderByDescending(x => x.StartedUtc).ToList();
+            var loaded = await Task.Run(ReplayStore.ListRuns);
+            if (!IsOpen() || revision != catalogRevision) return false;
+            if (selectionRevision != requestedSelection && run != null)
+            {
+                requestedId = run.Id;
+                requestedRoom = room?.Index;
+            }
+            catalog = loaded; // ReplayStore already returns most recent first.
             runs.Clear();
             foreach (var item in catalog)
                 runs.AddItem($"{item.StartedUtc.ToLocalTime():yyyy-MM-dd HH:mm}    {item.Character}    {ResultText(item.Result)}");
@@ -169,6 +195,9 @@ internal sealed class ReplayBrowser
             {
                 runs.AddItem(T("暂无回放", "No replays yet"));
                 run = null;
+                room = null;
+                events = [];
+                viewRevision++;
                 metadata.Text = "";
                 compatibility.Hide();
                 openRun.Hide();
@@ -178,13 +207,34 @@ internal sealed class ReplayBrowser
                 var hint = Text(T("完成一段单人游玩后，在这里回顾对局。也可以导入朋友的回放。", "Play a single-player run or import a friend's replay to start your library."));
                 hint.AutowrapMode = TextServer.AutowrapMode.WordSmart;
                 detail.AddChild(hint);
-                return;
+                return true;
             }
-            int index = Math.Max(0, catalog.ToList().FindIndex(x => x.Id == requestedId));
+            int index = 0;
+            if (requestedId != null)
+                for (int i = 0; i < catalog.Count; i++)
+                    if (catalog[i].Id == requestedId) { index = i; break; }
             runs.Select(index);
             SelectRun(index, requestedRoom);
+            if (opening && Window.Visible && Window.GuiGetFocusOwner() == originalFocus) runs.GrabFocus();
+            return true;
         }
-        catch (Exception e) { Error(e); }
+        catch (Exception e)
+        {
+            if (!IsOpen() || revision != catalogRevision) return false;
+            if (opening)
+            {
+                runs.Clear();
+                runs.AddItem(T("读取回放失败", "Could not load replays"));
+            }
+            Error(e);
+            retryRead = async () =>
+            {
+                if (await ReloadAsync(requestedId, requestedRoom, requestedSelection) && IsOpen())
+                    Message(T("回放库已刷新", "Library refreshed"));
+            };
+            retryCatalog.Show();
+            return false;
+        }
     }
 
     private void SelectRun(int index, int? requestedRoom = null)
@@ -654,13 +704,17 @@ internal sealed class ReplayBrowser
         dialog.FileSelected += async path =>
         {
             dialog.QueueFree();
+            int attempt = ++importRevision;
+            int requestedSelection = selectionRevision;
             Message(T("正在导入…", "Importing…"));
             try
             {
                 string id = await Task.Run(() => ReplayStore.Import(path));
-                if (IsOpen()) { Reload(id); Message(T("已导入回放", "Replay imported")); }
+                if (IsOpen() && attempt == importRevision &&
+                    await ReloadAsync(id, null, requestedSelection) && IsOpen() && attempt == importRevision)
+                    Message(T("已导入回放", "Replay imported"));
             }
-            catch (Exception e) { if (IsOpen()) Error(e); }
+            catch (Exception e) { if (IsOpen() && attempt == importRevision) Error(e); }
         };
         dialog.Canceled += () => dialog.QueueFree();
         dialog.PopupCenteredRatio(0.85f);
