@@ -176,7 +176,7 @@ internal static partial class CaptureHooks
 
     private static void BeforeWrite(CombatReplay? ____replay, out bool __state)
     {
-        __state = Recording && playableCombat && ____replay?.events.Count > 0;
+        __state = Recording && playableCombat && ____replay != null;
     }
 
     private static void AfterWrite(bool __state, PacketWriter ____writer)
@@ -189,7 +189,7 @@ internal static partial class CaptureHooks
         if (!Recording) return;
         // Defeat and abandon can precede the normal combat-end write.
         var replay = CurrentReplay(__instance.CombatReplayWriter);
-        if (playableCombat && replay?.events.Count > 0)
+        if (playableCombat && replay != null)
         {
             var packet = new PacketWriter();
             packet.Write(replay.Anonymized());
