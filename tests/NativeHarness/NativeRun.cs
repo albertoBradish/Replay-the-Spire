@@ -77,6 +77,7 @@ public static class NativeRun
                 GD.Print($"[ReplayHarness] window={game.GetTree().Root.Size} texture={game.GetTree().Root.GetTexture().GetSize()} pixels={image.GetSize()}");
             string phase = System.Environment.GetEnvironmentVariable("SPIRE_REPLAY_PHASE") ?? "record";
             if (phase == "control") GD.Print("REPLAY_CONTROL_PASS");
+            else if (phase == "damage-record") await RewardDamageAcceptance.RunAsync(game);
             else if (phase == "reward-record") await JourneyAcceptance.RewardRecordAsync(game);
             else if (phase == "reward-watch") await JourneyAcceptance.RewardWatchAsync(game);
             else if (phase == "journey-record") await JourneyAcceptance.RecordAsync(game);

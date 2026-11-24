@@ -84,6 +84,7 @@ native("control", profile="receiver")
 native("transfer", profile="receiver", extra=("--import-file", str(encoded[0])))
 # Continue the original native save before creating any unrelated fixture.
 record_and_watch("resume")
+native("damage-record")
 if native("timing"):
     native("control")
     native("timing-watch")
