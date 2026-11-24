@@ -23,6 +23,19 @@ public static class Gallery
     internal static string WriteForum(string runId, string directory, CancellationToken token) =>
         WriteIndex(runId, -1, directory, token);
 
+    internal sealed record CardMoment(int Decision, int Turn, string Title, long Damage, long Block)
+    {
+        internal string Caption => $"第 {Turn} 回合 · {Title}" + (Damage > 0 ? $"，实际扣血 {Damage}" : "") +
+            (Block > 0 ? $"，获得格挡 {Block}" : "");
+    }
+
+    internal static CardMoment? FeaturedCard(IEnumerable<ReplayEvent> events) => events
+        .Where(e => e.ActionIndex > 0 && e.Card.Length > 0 && e.Amount > 0 && e.Kind is "damage" or "block")
+        .GroupBy(e => (Decision: e.ActionIndex!.Value, e.Card, e.Turn))
+        .Select(g => new CardMoment(g.Key.Decision, g.Key.Turn, g.First().Label,
+            g.Where(e => e.Kind == "damage").Sum(e => (long)e.Amount), g.Where(e => e.Kind == "block").Sum(e => (long)e.Amount)))
+        .OrderByDescending(m => m.Damage + m.Block).ThenBy(m => m.Decision).FirstOrDefault();
+
     private static string WriteIndex(string runId, int roomIndex, string? forumDirectory, CancellationToken token)
     {
         var run = ReplayStore.ListRuns().Single(x => x.Id == runId);
@@ -40,13 +53,15 @@ public static class Gallery
             Directory.CreateDirectory(dir);
             string rel = Path.GetFileName(dir) + "/";
             var events = ReplayStore.LoadEvents(run.Id, room.Index);
+            var moment = forumDirectory == null ? null : FeaturedCard(events);
             html.Append("<section><h2>").Append(N(room.Floor)).Append("F · ").Append(Esc(room.Name)).Append("</h2>");
             postNumber++;
             post.AppendLine().AppendLine((forumDirectory == null ? "" : $"{postNumber} 楼 ｜ ") + $"第 {room.Floor} 层 · {room.Name}");
             int photoNumber = 0;
-            foreach (var png in Directory.EnumerateFiles(dir, "*.png").Order(StringComparer.Ordinal).ToArray())
+            var images = Directory.EnumerateFiles(dir).Where(p => Path.GetExtension(p).ToLowerInvariant() is ".png" or ".jpg" or ".jpeg");
+            foreach (var path in images.Order(StringComparer.Ordinal).ToArray())
             {
-                string file = Path.GetFileName(png);
+                string file = Path.GetFileName(path);
                 string pictures = rel;
                 var match = Regex.Match(file, @"^auto-(?<action>\d+)-turn-(?<turn>\d+)|^t(?<turn>\d+)-e(?<action>\d+)");
                 string caption = room.Name;
@@ -56,6 +71,9 @@ public static class Gallery
                     int action = int.Parse(match.Groups["action"].Value, CultureInfo.InvariantCulture);
                     caption = $"第 {turn} 回合 · 动作 {action}";
                 }
+                var highlighted = Regex.Match(file, @"-decision-(\d+)\.");
+                if (moment != null && highlighted.Success && int.TryParse(highlighted.Groups[1].Value, out int decision) && decision == moment.Decision)
+                    caption = moment.Caption;
                 var choice = Regex.Match(file, @"^choice-(\d+)");
                 if (choice.Success && int.TryParse(choice.Groups[1].Value, out int choiceNumber) && choiceNumber > 0 && choiceNumber <= events.Count)
                     caption = events[choiceNumber - 1].Label;
@@ -64,8 +82,8 @@ public static class Gallery
                     pictures = "images/";
                     var flat = Path.Combine(root, "images");
                     Directory.CreateDirectory(flat);
-                    file = $"{postNumber:D3}-F{room.Floor:D2}-{++photoNumber:D2}.png";
-                    File.Move(png, Path.Combine(flat, file));
+                    file = $"{postNumber:D3}-F{room.Floor:D2}-{++photoNumber:D2}{Path.GetExtension(file)}";
+                    File.Move(path, Path.Combine(flat, file));
                 }
                 html.Append("<figure><img loading='lazy' alt='游戏画面' src='").Append(pictures)
                     .Append(Uri.EscapeDataString(file)).Append("'><figcaption>").Append(Esc(caption)).Append("</figcaption></figure>");

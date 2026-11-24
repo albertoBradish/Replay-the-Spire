@@ -431,6 +431,10 @@ internal sealed class ReplayToolbar
 
     private async Task CaptureRoomFrames(CancellationToken token, int slices, string? destination, string prefix)
     {
+        var timeline = destination != null && room.HasCombat ? ReplayStore.LoadEvents(run.Id, room.Index) : [];
+        var moment = Gallery.FeaturedCard(timeline);
+        int targetDecision = moment == null ? 0 : moment.Decision + new BattleTimeline(timeline).Before.Length;
+        bool featured = false;
         int captured = 0;
         int lastEvent = -1;
         int nextSlice = 1;
@@ -441,13 +445,19 @@ internal sealed class ReplayToolbar
             bool ended = ReplayPlayer.IsFinished;
             if (ended && (ReplayPlayer.HasError || room.HasCombat && !ReplayPlayer.IsVerified))
                 throw new InvalidDataException(ReplayPlayer.Status);
-            if (at != lastEvent && (captured == 0 || ended ||
-                nextSlice < slices && (long)at * slices >= (long)nextSlice * ReplayPlayer.EventCount))
+            bool atCard = moment != null && !featured && ReplayPlayer.CurrentDecision >= targetDecision;
+            bool atSlice = moment == null && nextSlice < slices && (long)at * slices >= (long)nextSlice * ReplayPlayer.EventCount;
+            if (at != lastEvent && (captured == 0 || ended || atCard || atSlice))
             {
                 if (captured > 0)
                     while (nextSlice < slices && (long)at * slices >= (long)nextSlice * ReplayPlayer.EventCount) nextSlice++;
-                string name = room.HasCombat ? $"auto-{at:D6}-turn-{ReplayPlayer.CurrentTurn:D3}.png" : $"choice-{at:D5}.png";
-                await WriteFrame(name, token, destination);
+                string name = room.HasCombat ? $"auto-{at:D6}-turn-{ReplayPlayer.CurrentTurn:D3}" : $"choice-{at:D5}";
+                if (atCard)
+                {
+                    name += $"-decision-{moment!.Decision:D5}";
+                    featured = true;
+                }
+                await WriteFrame(name + (destination == null ? ".png" : ".jpg"), token, destination);
                 captured++;
                 lastEvent = at;
             }
@@ -498,13 +508,11 @@ internal sealed class ReplayToolbar
             finally { RenderingServer.FramePostDraw -= Drawn; }
             using var image = tree.Root.GetTexture().GetImage();
             if (image == null || image.IsEmpty()) throw new IOException(T("无法读取游戏画面。", "Could not read the game frame."));
-            if (destination != null && image.GetWidth() > 1600)
-                image.Resize(1600, Math.Max(1, (int)Math.Round(image.GetHeight() * (1600.0 / image.GetWidth()))), Image.Interpolation.Lanczos);
             string path = Path.Combine(destination ?? Gallery.FrameDirectory(run.Id, room.Index), filename);
             string pending = path + ".partial";
             try
             {
-                var error = image.SavePng(pending);
+                var error = destination == null ? image.SavePng(pending) : image.SaveJpg(pending, 0.91f);
                 if (error != Godot.Error.Ok) throw new IOException($"{T("截图保存失败", "Could not save frame")} ({error})");
                 File.Move(pending, path, true);
             }
