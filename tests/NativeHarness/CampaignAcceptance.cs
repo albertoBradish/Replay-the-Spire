@@ -113,6 +113,7 @@ internal static class CampaignAcceptance
     internal sealed class CampaignDriver(RunState run, Player player, bool ordinary = false)
     {
         private bool keptCard;
+        private bool keptTreasure;
 
         internal async Task<bool> VisitAsync(AbstractRoom room)
         {
@@ -154,29 +155,36 @@ internal static class CampaignAcceptance
             }
             else if (room is TreasureRoom)
             {
-                var chest = NRun.Instance!.TreasureRoom!;
                 if (!map.IsTravelEnabled)
                 {
+                    await JourneyAcceptance.Wait(() => NRun.Instance?.TreasureRoom is { } view && view.IsNodeReady(),
+                        "native treasure room ready");
+                    var chest = NRun.Instance!.TreasureRoom!;
                     var open = (Task)AccessTools.Method(typeof(NTreasureRoom), "OpenChest").Invoke(chest, null)!;
                     var picking = RunManager.Instance.TreasureRoomRelicSynchronizer;
                     await JourneyAcceptance.Wait(() => picking.CurrentRelics is {Count: > 0} &&
                         AccessTools.Field(typeof(NTreasureRoom), "_isRelicCollectionOpen").GetValue(chest) is true,
                         "campaign treasure");
-                    if (ordinary)
+                    if (ordinary || !keptTreasure)
                     {
+                        var selected = picking.CurrentRelics![0].Id;
                         picking.PickRelicLocally(0);
                         while (!open.IsCompleted)
                         {
                             await JourneyAcceptance.Wait(() => open.IsCompleted || NOverlayStack.Instance?.Peek() is NCardGridSelectionScreen,
-                                "ordinary relic pickup");
+                                "native treasure relic pickup");
                             if (NOverlayStack.Instance?.Peek() is NCardGridSelectionScreen select) await SelectGridAsync(select);
                         }
                         await open;
+                        if (!player.Relics.Any(r => r.Id == selected))
+                            throw new InvalidDataException("Treasure pickup did not award " + selected);
+                        keptTreasure = true;
                     }
                     else
                     {
-                        // Skipping opens the map; the chest task finishes when the player leaves.
-                        AccessTools.Method(typeof(NTreasureRoom), "OnProceedButtonPressed").Invoke(chest, [null]);
+                        var proceed = chest.GetNode<NProceedButton>("%ProceedButton");
+                        await JourneyAcceptance.Wait(() => proceed.IsEnabled && proceed.IsSkip, "native treasure skip button");
+                        proceed.EmitSignal(NClickableControl.SignalName.Released, proceed);
                         _ = open.ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
                     }
                 }
