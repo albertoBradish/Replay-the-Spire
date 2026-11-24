@@ -447,8 +447,12 @@ internal sealed class ReplayToolbar
             int rewardDecision = ReplayPlayer.DecisionCount - battle.After.Length + 1;
             if (!ReplayPlayer.IsFinished && !RewardChoices.Visible)
             {
+                // The hit already tells this room's story. Avoid simulating a long
+                // tail purely to obtain an extra shot of the reward screen.
+                if (stillInCombat && rewardDecision - ReplayPlayer.CurrentDecision > 6) return;
                 ReplayPlayer.AdvanceToPhoto(rewardDecision);
                 await WaitAtDecision(token);
+                if (ReplayPlayer.HasError) throw new InvalidDataException(ReplayPlayer.Status);
             }
             if (RewardChoices.Visible)
                 await WriteFrame("rewards.jpg", token, directory);

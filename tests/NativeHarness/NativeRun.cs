@@ -99,16 +99,19 @@ public static class NativeRun
                 // Run this file without changing its original mod fingerprint in storage.
                 // The test-only assembly adds no content to the original game simulation.
                 var type = typeof(ReplayPlayer).Assembly.GetType("SpireReplay.Interface.ReplayToolbar", true)!;
+                int? sampleRoom = int.TryParse(System.Environment.GetEnvironmentVariable("SPIRE_REPLAY_SAMPLE_ROOM"),out int requested) ? requested : null;
+                var target = sampleRoom.HasValue ? run.Rooms.Single(r => r.Index == sampleRoom) : run.Rooms.First();
+                string method = sampleRoom.HasValue ? "CaptureAlbumAsync" : "CaptureForumAsync";
                 var toolbar = Activator.CreateInstance(type, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance,
-                    null, [game.GetTree(),run,run.Rooms.First(),false], null)!;
+                    null, [game.GetTree(),run,target,false], null)!;
                 AccessTools.Method(type,"Show").Invoke(toolbar,null);
                 var timer = System.Diagnostics.Stopwatch.StartNew();
                 try
                 {
-                    var index = await (Task<string>)AccessTools.Method(type,"CaptureForumAsync").Invoke(toolbar,null)!;
+                    var index = await (Task<string>)AccessTools.Method(type,method).Invoke(toolbar,null)!;
                     long first = timer.ElapsedMilliseconds;
                     timer.Restart();
-                    var reused = await (Task<string>)AccessTools.Method(type,"CaptureForumAsync").Invoke(toolbar,null)!;
+                    var reused = await (Task<string>)AccessTools.Method(type,method).Invoke(toolbar,null)!;
                     if (reused != index) throw new InvalidDataException("Unchanged recording was rendered twice.");
                     GD.Print($"REPLAY_SAMPLE_ALBUM_PASS ms={first} repeatMs={timer.ElapsedMilliseconds} index={index}");
                 }
