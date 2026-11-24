@@ -55,6 +55,7 @@ internal static class CourierAcceptance
         var info = ReplayStore.ListRuns().First(r => r.Seed == Seed && r.Rooms.Any(x => ReplayStore.LoadEvents(r.Id,x.Index).Any(e => e.ActionKey == choice.value.TextKey)));
         var visit = info.Rooms.Single(x => ReplayStore.LoadEvents(info.Id,x.Index).Any(e => e.ActionKey == choice.value.TextKey));
         File.WriteAllLines(Receipt,[info.Id,visit.Index.ToString(),after]);
+        GD.Print("REPLAY_COURIER_RECORD_PASS");
     }
 
     internal static async Task WatchAsync()
@@ -68,5 +69,6 @@ internal static class CourierAcceptance
         if (ReplayPlayer.HasError || Potions(run.Players.Single()) != receipt[2] || run.CurrentRoom is not EventRoom room || !room.LocalMutableEvent.IsFinished)
             throw new InvalidDataException("Courier reward or event result diverged: " + ReplayPlayer.Status);
         await ReplayPlayer.StopAsync();
+        GD.Print("REPLAY_COURIER_WATCH_PASS");
     }
 }
