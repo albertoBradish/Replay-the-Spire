@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Text.Json;
 using Godot;
 using HarmonyLib;
+using MegaCrit.Sts2.Core.CardSelection;
 using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Commands;
 using MegaCrit.Sts2.Core.Entities.Cards;
@@ -12,6 +13,8 @@ using MegaCrit.Sts2.Core.Models.Cards;
 using MegaCrit.Sts2.Core.Models.Characters;
 using MegaCrit.Sts2.Core.Models.Events;
 using MegaCrit.Sts2.Core.Nodes;
+using MegaCrit.Sts2.Core.Nodes.CommonUi;
+using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
 using MegaCrit.Sts2.Core.Nodes.Rewards;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
 using MegaCrit.Sts2.Core.Nodes.Screens;
@@ -276,19 +279,35 @@ internal static class CampaignAcceptance
 
         private static async Task SelectGridAsync(NCardGridSelectionScreen grid)
         {
-            var options = (IReadOnlyList<CardModel>)AccessTools.Field(typeof(NCardGridSelectionScreen), "_cards").GetValue(grid)!;
-            if (options.Count == 0) throw new InvalidDataException("No card on event selection grid.");
-            var prefs = AccessTools.Field(grid.GetType(), "_prefs").GetValue(grid)!;
-            int count = (int)(AccessTools.Property(prefs.GetType(), "MinSelect")?.GetValue(prefs) ??
-                AccessTools.Field(prefs.GetType(), "MinSelect").GetValue(prefs))!;
-            var click = AccessTools.Method(grid.GetType(), "OnCardClicked");
-            foreach (var selected in options.OrderBy(c => c is TheScythe).Take(Math.Max(1, count)))
-                click.Invoke(grid, [selected]);
-            var confirm = AccessTools.Method(grid.GetType(), "ConfirmSelection");
-            confirm.Invoke(grid, [null]);
-            if (ReferenceEquals(NOverlayStack.Instance?.Peek(), grid))
-                AccessTools.Method(grid.GetType(), "CompleteSelection")?.Invoke(grid, [null]);
-            await JourneyAcceptance.Wait(() => NOverlayStack.Instance?.Peek() != grid, "event grid selection confirmed");
+            var type = grid.GetType();
+            if (AccessTools.Field(typeof(NCardGridSelectionScreen), "_cards")?.GetValue(grid) is not IReadOnlyList<CardModel> { Count: > 0 } options ||
+                AccessTools.Field(type, "_prefs")?.GetValue(grid) is not CardSelectorPrefs prefs)
+                throw new InvalidDataException("Missing card options or selection limits on " + type.Name);
+            var click = AccessTools.Method(type, "OnCardClicked", [typeof(CardModel)]) ??
+                throw new MissingMethodException(type.Name, "OnCardClicked");
+            var completion = grid.CardsSelected();
+            int count = prefs.RequireManualConfirmation ? Math.Max(1, prefs.MinSelect) : prefs.MaxSelect;
+            var picks = options.OrderBy(c => c is TheScythe).Take(count).ToArray();
+            foreach (var card in picks) click.Invoke(grid, [card]);
+
+            // Simple single-choice grids close on the card click. Deck selection screens may
+            // first ask to preview the choices, then enable a second confirmation button.
+            var pressed = new HashSet<NConfirmButton>();
+            while (!completion.IsCompleted && pressed.Count < 2)
+            {
+                NConfirmButton? button = null;
+                await JourneyAcceptance.Wait(() => completion.IsCompleted ||
+                    (button = grid.FindChildren("*", "", true, false).OfType<NConfirmButton>()
+                        .FirstOrDefault(b => !pressed.Contains(b) && b.IsVisibleInTree() && b.IsEnabled)) != null,
+                    "confirmation button on " + type.Name);
+                if (completion.IsCompleted) break;
+                pressed.Add(button!);
+                button!.EmitSignal(NClickableControl.SignalName.Released, button);
+            }
+            await JourneyAcceptance.Wait(() => completion.IsCompleted && NOverlayStack.Instance?.Peek() != grid, "selection closed on " + type.Name);
+            if (!(await completion).ToHashSet().SetEquals(picks))
+                throw new InvalidDataException(type.Name + " returned different cards than the ones selected.");
+            GD.Print($"[ReplayHarness] {type.Name} confirmed {string.Join(", ", picks.Select(c => c.Id))}");
         }
     }
 
