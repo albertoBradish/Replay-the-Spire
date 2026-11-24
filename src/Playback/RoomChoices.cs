@@ -129,6 +129,10 @@ internal sealed class RoomChoices(RunState run, IReadOnlyList<ReplayEvent> timel
             return false;
         if (index == -1)
         {
+            // The native skip button has a delayed enable task tied to this room.
+            // Allow it to finish before the next room can release the button.
+            var proceed = chest.GetNode<NProceedButton>("%ProceedButton");
+            await wait(() => proceed.IsEnabled && proceed.IsSkip);
             picking.OnPicked(run.Players[0], null);
             _ = animation.ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
             return true;
