@@ -15,7 +15,7 @@ $gameVersion = $release.version.TrimStart('v')
 if ($gameVersion -notin @('0.111.1', '0.113.1')) { throw "The supported game builds are 0.111.1 and 0.113.1. Found $gameVersion." }
 $manifest = Get-Content -LiteralPath (Join-Path $root 'mod_manifest.json') -Raw | ConvertFrom-Json
 if (!$OutputDirectory) { $OutputDirectory = Join-Path $root "artifacts/$gameVersion/SpireReplay" }
-$out = [IO.Path]::GetFullPath($OutputDirectory)
+$out = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
 if ($out -eq $game -or $out.StartsWith($game + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
     throw 'Select an output directory outside the source installation.'
 }
@@ -33,7 +33,13 @@ if ($Package) {
         $archive = [IO.Compression.ZipFile]::Open($stage, 'Create')
         try {
             foreach ($name in @('SpireReplay.dll', 'mod_manifest.json', 'LICENSE')) {
-                [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, (Join-Path $out $name), "SpireReplay/$name") | Out-Null
+                $entry = $archive.CreateEntry("SpireReplay/$name", [IO.Compression.CompressionLevel]::Optimal)
+                $entry.LastWriteTime = [datetimeoffset]::new(2000, 1, 1, 0, 0, 0, [timespan]::Zero)
+                $source = [IO.File]::OpenRead((Join-Path $out $name))
+                try {
+                    $dest = $entry.Open()
+                    try { $source.CopyTo($dest) } finally { $dest.Dispose() }
+                } finally { $source.Dispose() }
             }
         } finally { $archive.Dispose() }
         Move-Item -LiteralPath $stage -Destination $zip -Force
