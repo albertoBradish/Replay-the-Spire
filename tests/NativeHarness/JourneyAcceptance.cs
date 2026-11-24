@@ -7,8 +7,10 @@ using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.GameActions;
 using MegaCrit.Sts2.Core.Map;
 using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.Models.Cards;
 using MegaCrit.Sts2.Core.Models.Characters;
 using MegaCrit.Sts2.Core.Nodes;
+using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
 using MegaCrit.Sts2.Core.Nodes.Rewards;
 using MegaCrit.Sts2.Core.Nodes.Screens;
@@ -202,7 +204,8 @@ public static class JourneyAcceptance
         finally { Engine.TimeScale = clock; }
     }
 
-    internal static async Task WinFightAsync(Player who)
+    internal static async Task WinFightAsync(Player who,
+        Func<IEnumerable<CardModel>, IEnumerable<CardModel>>? selectCandidates = null)
     {
         var combat = who.Creature.CombatState!;
         for (int n = 0; n < 90 && CombatManager.Instance.IsInProgress; n++)
@@ -211,16 +214,19 @@ public static class JourneyAcceptance
                 who.PlayerCombatState?.Phase == PlayerTurnPhase.Play && !CombatManager.Instance.PlayerActionsDisabled &&
                 !RunManager.Instance.ActionExecutor.IsRunning, "reward encounter turn");
             if (!CombatManager.Instance.IsInProgress) break;
-            var hand = who.PlayerCombatState!.Hand.Cards;
+            IEnumerable<CardModel> hand = who.PlayerCombatState!.Hand.Cards;
+            if (selectCandidates != null) hand = selectCandidates(hand);
             var enemy = combat.HittableEnemies.OrderBy(e => e.CurrentHp).FirstOrDefault();
             var attack = hand.FirstOrDefault(c => c.TargetType == TargetType.AnyEnemy && c.CanPlay() && enemy != null);
             var defend = hand.FirstOrDefault(c => c.Type == CardType.Skill && c.CanPlay() && c.TargetType == TargetType.Self);
             var card = attack ?? defend;
-            if (card != null)
+            if (card is Discovery discovery)
+                await PlayDiscoveryAsync(discovery);
+            else if (card != null)
             {
                 var play = new PlayCardAction(card, attack != null ? enemy : null);
                 RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(play);
-                await Wait(() => play.CompletionTask.IsCompleted || !CombatManager.Instance.IsInProgress, "reward encounter card");
+                await Wait(() => play.CompletionTask.IsCompleted || !CombatManager.Instance.IsInProgress, $"turn {combat.RoundNumber} play {card.Id}");
             }
             else
             {
@@ -230,6 +236,24 @@ public static class JourneyAcceptance
             }
         }
         Require(!CombatManager.Instance.IsInProgress && !who.Creature.IsDead, "won normal encounter");
+    }
+
+    internal static async Task<CardModel> PlayDiscoveryAsync(Discovery discovery)
+    {
+        var play = new PlayCardAction(discovery, null);
+        RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(play);
+        await Wait(() => NOverlayStack.Instance?.Peek() is NChooseACardSelectionScreen, "Discovery offers");
+        var screen = (NChooseACardSelectionScreen)NOverlayStack.Instance!.Peek()!;
+        // SelectHolder ignores presses during the first 350 real milliseconds.
+        var opened = Time.GetTicksMsec();
+        await Wait(() => Time.GetTicksMsec() - opened > 350, "Discovery accepts input");
+        var holder = (NCardHolder)screen.DefaultFocusedControl;
+        var chosen = holder.CardModel!;
+        holder.EmitSignal(NCardHolder.SignalName.Pressed, holder);
+        await Wait(() => play.CompletionTask.IsCompleted, "Discovery generated " + chosen.Id);
+        await play.CompletionTask;
+        GD.Print($"[ReplayHarness] Discovery selected {chosen.Id}");
+        return chosen;
     }
 
     private static Task PressReward(NRewardButton button) =>

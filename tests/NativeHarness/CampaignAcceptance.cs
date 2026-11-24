@@ -121,7 +121,7 @@ internal static class CampaignAcceptance
             else if (room is CombatRoom)
             {
                 if (CombatManager.Instance.IsInProgress)
-                    await JourneyAcceptance.WinFightAsync(player);
+                    await JourneyAcceptance.WinFightAsync(player, CombatCandidates);
                 await JourneyAcceptance.Wait(() => NOverlayStack.Instance?.Peek() is NRewardsScreen ||
                     NMapScreen.Instance!.IsOpen || run.CurrentRoom != room || CombatManager.Instance.IsInProgress,
                     "post-combat reward or map");
@@ -163,6 +163,10 @@ internal static class CampaignAcceptance
             else throw new InvalidDataException("Unhandled native room " + room.GetType().Name);
             return false;
         }
+
+        private static IEnumerable<CardModel> CombatCandidates(IEnumerable<CardModel> hand) =>
+            hand.Where(c => c is TheScythe or Clash or PommelStrike or Discovery)
+                .OrderBy(c => c switch { TheScythe => 0, Clash => 1, _ => 2 });
 
         private static async Task OpenMapAsync()
         {

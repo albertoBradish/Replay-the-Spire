@@ -48,7 +48,7 @@ internal static class CombatChoicesAcceptance
         var player = run.Players.Single();
         await CardPileCmd.RemoveFromDeck(player.Deck.Cards.ToArray(), false);
         foreach (CardModel source in new CardModel[] { ModelDb.Card<TrueGrit>(), ModelDb.Card<SwordBoomerang>(),
-            ModelDb.Card<PommelStrike>(), ModelDb.Card<PommelStrike>(), ModelDb.Card<TrueGrit>() })
+            ModelDb.Card<PommelStrike>(), ModelDb.Card<PommelStrike>(), ModelDb.Card<Discovery>() })
         {
             var model = run.CreateCard(source, player);
             if (model is TrueGrit) { model.UpgradeInternal(); model.FinalizeUpgradeInternal(); }
@@ -78,11 +78,14 @@ internal static class CombatChoicesAcceptance
         var boomerang = new PlayCardAction(player.PlayerCombatState.Hand.Cards.Single(c => c is SwordBoomerang), null);
         RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(boomerang);
         await Wait(() => boomerang.CompletionTask.IsCompleted, "random targets");
+        var generated = await JourneyAcceptance.PlayDiscoveryAsync(player.PlayerCombatState.Hand.Cards.OfType<Discovery>().Single());
+        if (!player.PlayerCombatState.Hand.Cards.Contains(generated))
+            throw new InvalidDataException("Discovery did not add the selected card to the hand.");
         // With only five cards the next draw has to reshuffle the discard pile.
         var end = new EndPlayerTurnAction(player, combat.RoundNumber);
         RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(end);
         await Wait(() => combat.RoundNumber >= 2 && player.PlayerCombatState.Phase == PlayerTurnPhase.Play &&
-            player.PlayerCombatState.Hand.Cards.Count == 4 && !RunManager.Instance.ActionExecutor.IsRunning, "reshuffle");
+            player.PlayerCombatState.Hand.Cards.Any(c => c is SwordBoomerang) && !RunManager.Instance.ActionExecutor.IsRunning, "reshuffle");
         var expected = Signature(player);
         await game.ReturnToMainMenu();
         var record = ReplayStore.ListRuns().First(r => r.Seed == Seed);
@@ -90,6 +93,8 @@ internal static class CombatChoicesAcceptance
         var data = ReplayStore.LoadRoom(record.Id, battle.Index);
         if (!data.Events.Any(e => e.Kind == "damage") || !data.Events.Any(e => e.Kind == "block"))
             throw new InvalidDataException("Missing damage or block.");
+        if (!data.Events.Any(e => e.Kind == "choice" && e.ActionKey == "index:1"))
+            throw new InvalidDataException("Missing the middle choice from the Discovery offer.");
         File.WriteAllText(StatePath(), expected);
         GD.Print("REPLAY_CHOICES_RECORD_PASS");
     }
@@ -104,7 +109,7 @@ internal static class CombatChoicesAcceptance
         await Wait(() => ReplayPlayer.IsFinished, "nested replay");
         if (!ReplayPlayer.IsVerified) throw new InvalidOperationException(ReplayPlayer.Status);
         if (Signature(RunManager.Instance.DebugOnlyGetState()!.Players.Single()) != File.ReadAllText(StatePath()))
-            throw new InvalidDataException("Mismatch after potion + hand selection + reshuffle");
+            throw new InvalidDataException("Mismatch after potion, hand selection, Discovery and reshuffle.");
         await ReplayPlayer.StopAsync();
         GD.Print("REPLAY_CHOICES_WATCH_PASS");
     }
