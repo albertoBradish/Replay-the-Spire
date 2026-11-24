@@ -561,7 +561,12 @@ internal sealed class ReplayToolbar
                         min = Math.Min(min, light);
                         max = Math.Max(max, light);
                     }
-                if (max - min >= .09f || clock.Elapsed.TotalSeconds >= 2) return image;
+                if (max - min >= .09f) return image;
+                if (clock.Elapsed.TotalSeconds >= 2)
+                {
+                    image.Dispose();
+                    throw new InvalidDataException(T("此处仍在切换场景。", "The scene is still transitioning."));
+                }
                 image.Dispose();
                 if (scale == 0) Engine.TimeScale = 1;
                 await tree.ToSignal(tree.CreateTimer(.1, true, false, true), SceneTreeTimer.SignalName.Timeout);
