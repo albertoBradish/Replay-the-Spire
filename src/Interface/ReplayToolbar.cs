@@ -1,6 +1,10 @@
 using Godot;
+using HarmonyLib;
 using MegaCrit.Sts2.Core.Nodes.Combat;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
+using MegaCrit.Sts2.Core.Nodes.Screens;
+using MegaCrit.Sts2.Core.Nodes.Screens.Overlays;
+using MegaCrit.Sts2.Core.Nodes.Vfx;
 using MegaCrit.Sts2.Core.Nodes.Screens.Map;
 using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Map;
@@ -41,6 +45,7 @@ internal sealed class ReplayToolbar
     private bool collapsed;
     private bool captureRequested;
     private CancellationTokenSource? album;
+    private TimeSpan albumOpening;
     private string previousStatus = "";
     private bool summaryOnly;
     private ulong advanceAfter;
@@ -146,6 +151,7 @@ internal sealed class ReplayToolbar
     internal async Task OpenRoomAsync(RoomInfo target, int turn, int? decision = null)
     {
         busy = true;
+        long started = Stopwatch.GetTimestamp();
         try
         {
             var data = ReplayStore.LoadRoom(run.Id, target.Index);
@@ -158,11 +164,11 @@ internal sealed class ReplayToolbar
             previousStatus = "";
             if (data.Combat is { Length: > 0 } combat)
             {
-                if (decision is > 0) await ReplayPlayer.PlayDecisionAsync(combat, decision.Value, data.Events);
+                if (decision is > 0) await ReplayPlayer.PlayDecisionAsync(combat, decision.Value, data.Events, keepRunAssets: album != null);
                 else await ReplayPlayer.PlayAsync(combat, turn, data.Events);
             }
             else if (data.Checkpoint is { Length: > 0 } checkpoint)
-                await ReplayPlayer.PlayRoomAsync(checkpoint, data.Events, decision ?? 0);
+                await ReplayPlayer.PlayRoomAsync(checkpoint, data.Events, decision ?? 0, keepRunAssets: album != null);
             else
             {
                 if (ReplayPlayer.IsActive) await ReplayPlayer.StopAsync();
@@ -179,7 +185,11 @@ internal sealed class ReplayToolbar
                 Feedback(T("楼层决策记录", "Recorded floor decisions"));
             }
         }
-        finally { busy = false; }
+        finally
+        {
+            if (album != null) albumOpening += Stopwatch.GetElapsedTime(started);
+            busy = false;
+        }
     }
 
     private async void Go(RoomInfo destination)
@@ -389,6 +399,7 @@ internal sealed class ReplayToolbar
                 reused = await Task.Run(() => AlbumIndex.Find(key, token), token);
                 if (reused != null) return;
                 Directory.CreateDirectory(pending);
+                var captureClock = Stopwatch.StartNew();
                 for (int i = 0; i < run.Rooms.Count; i++)
                 {
                     token.ThrowIfCancellationRequested();
@@ -414,6 +425,7 @@ internal sealed class ReplayToolbar
                 token.ThrowIfCancellationRequested();
                 Directory.Move(pending, complete);
                 await Task.Run(() => AlbumIndex.Remember(key, complete));
+                GD.Print($"[SpireReplay] Gallery export room_open_ms={albumOpening.TotalMilliseconds:F0} seek_capture_write_ms={(captureClock.Elapsed - albumOpening).TotalMilliseconds:F0}");
             });
             return reused ?? Path.Combine(complete, "index.html");
         }
@@ -432,16 +444,28 @@ internal sealed class ReplayToolbar
             // Seek directly to the boundary after the featured action. The native
             // executor resolves all nested choices before it can pause there.
             int decision = moment == null ? 1 : moment.Decision + 1;
-            await OpenRoomAsync(target, 0, decision);
-            await WaitAtDecision(token);
-            if (ReplayPlayer.HasError) throw new InvalidDataException(ReplayPlayer.Status);
+            Image? highlight = null;
+            using (var hit = moment is { Damage: > 0 }
+                ? new GalleryHit(tree, moment, () => HideFrameOverlays(albumFrame: true, combat: true))
+                : null)
+            {
+                await OpenRoomAsync(target, 0, decision);
+                await WaitAtDecision(token);
+                if (ReplayPlayer.HasError) throw new InvalidDataException(ReplayPlayer.Status);
+                highlight = hit?.Take();
+            }
+            using var hitFrame = highlight;
             var battle = new BattleTimeline(events);
             bool stillInCombat = !RewardChoices.Visible && NMapScreen.Instance?.IsOpen != true;
-            if (stillInCombat)
+            if (hitFrame != null || stillInCombat)
             {
-                string suffix = moment == null ? "" : $"-decision-{moment.Decision:D5}";
-                await WriteFrame($"auto-{ReplayPlayer.CurrentEvent:D6}-turn-{(moment?.Turn ?? ReplayPlayer.CurrentTurn):D3}{suffix}.jpg",
-                    token, directory, featuredCard: moment != null);
+                string suffix = moment != null && (hitFrame != null || moment.Damage == 0)
+                    ? $"-decision-{moment.Decision:D5}" : "";
+                string filename = $"auto-{ReplayPlayer.CurrentEvent:D6}-turn-{(moment?.Turn ?? ReplayPlayer.CurrentTurn):D3}{suffix}.jpg";
+                if (hitFrame != null)
+                    SaveImage(hitFrame, directory, filename, png: false);
+                else
+                    await WriteFrame(filename, token, directory);
             }
             if (battle.After.Length == 0 || battle.After[0].Kind != "reward") return;
             int rewardDecision = ReplayPlayer.DecisionCount - battle.After.Length + 1;
@@ -449,7 +473,7 @@ internal sealed class ReplayToolbar
             {
                 // The hit already tells this room's story. Avoid simulating a long
                 // tail purely to obtain an extra shot of the reward screen.
-                if (stillInCombat && rewardDecision - ReplayPlayer.CurrentDecision > 6) return;
+                if ((hitFrame != null || stillInCombat) && rewardDecision - ReplayPlayer.CurrentDecision > 6) return;
                 ReplayPlayer.AdvanceToPhoto(rewardDecision);
                 await WaitAtDecision(token);
                 if (ReplayPlayer.HasError) throw new InvalidDataException(ReplayPlayer.Status);
@@ -482,6 +506,7 @@ internal sealed class ReplayToolbar
     {
         using var cancellation = new CancellationTokenSource();
         album = cancellation;
+        albumOpening = TimeSpan.Zero;
         double savedSpeed = ReplayPlayer.Speed;
         bool originalTiming = ReplayPlayer.OriginalTiming;
         cancelAlbum.Visible = true;
@@ -516,106 +541,107 @@ internal sealed class ReplayToolbar
         if (!ReplayPlayer.IsActive) throw new InvalidOperationException(T("回放已关闭。", "Replay closed."));
     }
 
-    private async Task WriteFrame(string filename, CancellationToken token, string? destination = null, bool featuredCard = false, MapCoord? route = null)
+    private async Task WriteFrame(string filename, CancellationToken token, string? destination = null, MapCoord? route = null)
     {
         if (DisplayServer.GetName().Equals("headless", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException(T("请在图形窗口中截取画面。", "Open the graphical game to capture a frame."));
-        // Decision stepping can freeze a turn banner over the card and damage it illustrates.
-        Control[] banners = featuredCard && NCombatRoom.Instance is { } combat
-            ? combat.GetChildren().OfType<Control>().Where(node => node.Visible &&
-                node is NPlayerTurnBanner or NEnemyTurnBanner or NCombatStartBanner).ToArray()
-            : [];
-        var caption = tree.Root.GetNodeOrNull<CanvasLayer>("ReplayDecisionCaption");
-        bool captionVisible = caption?.Visible == true;
-        if (destination != null && captionVisible) caption!.Hide();
-        panel.Hide();
+        bool albumFrame = destination != null;
+        var map = albumFrame && NMapScreen.Instance?.IsOpen == true ? NMapScreen.Instance : null;
+        var rewards = albumFrame ? NOverlayStack.Instance?.Peek() as NRewardsScreen : null;
+
+        if (map != null)
+        {
+            AdvanceVisual(map, "_actAnimTween", 10);
+            AdvanceVisual(map, "_tween", 1);
+            if (route is { } point && RunManager.Instance.DebugOnlyGetState()?.Players.FirstOrDefault() is { } player)
+            {
+                RoomChoices.Ping(map, point, player);
+                var ping = map.FindChildren("*", "", true, false).OfType<NMapPingVfx>().LastOrDefault();
+                if (ping != null) AdvanceVisual(ping, "_tween", .16);
+            }
+        }
+        else if (rewards != null)
+        {
+            AdvanceVisual(rewards, "_fadeTween", 1);
+        }
+
+        var restore = HideFrameOverlays(albumFrame, combat: albumFrame && map == null && rewards == null, map: map != null);
         try
         {
-            foreach (var banner in banners) banner.Hide();
-            // Read only after a complete frame has actually been presented with the toolbar hidden.
-            await tree.ToSignal(tree, SceneTree.SignalName.ProcessFrame);
-            bool drawn = false;
-            void Drawn() => drawn = true;
-            RenderingServer.FramePostDraw += Drawn;
-            try
-            {
-                var timeout = Stopwatch.StartNew();
-                while (!drawn)
-                {
-                    token.ThrowIfCancellationRequested();
-                    if (timeout.Elapsed.TotalSeconds > 10)
-                        throw new TimeoutException(T("请恢复游戏窗口后重试截图。", "Restore the game window and try capturing again."));
-                    await tree.ToSignal(tree, SceneTree.SignalName.ProcessFrame);
-                }
-            }
-            finally { RenderingServer.FramePostDraw -= Drawn; }
-            using var image = await ReadPresentedFrame(token, destination != null, route);
-            if (image == null || image.IsEmpty()) throw new IOException(T("无法读取游戏画面。", "Could not read the game frame."));
-            string path = Path.Combine(destination ?? Gallery.FrameDirectory(run.Id, room.Index), filename);
-            string pending = path + ".partial";
-            try
-            {
-                var error = destination == null ? image.SavePng(pending) : image.SaveJpg(pending, 0.91f);
-                if (error != Godot.Error.Ok) throw new IOException($"{T("截图保存失败", "Could not save frame")} ({error})");
-                File.Move(pending, path, true);
-            }
-            finally { if (File.Exists(pending)) File.Delete(pending); }
+            bool settleRoom = albumFrame && map == null && rewards == null;
+            if (!settleRoom) await WaitForDraw(token);
+            if (map != null && map.GetNodeOrNull<Control>("TheMap/Points") is not { Modulate.A: >= .98f })
+                throw new InvalidDataException(T("地图节点尚未显示。", "The map points are not visible yet."));
+            if (rewards != null && (!rewards.IsVisibleInTree() || rewards.GetNodeOrNull<Control>("Rewards") is not { Modulate.A: >= .98f }))
+                throw new InvalidDataException(T("奖励尚未显示。", "The rewards are not visible yet."));
+
+            using var image = settleRoom ? await ReadSettledRoom(token) : tree.Root.GetTexture().GetImage();
+            SaveImage(image, destination ?? Gallery.FrameDirectory(run.Id, room.Index), filename, png: !albumFrame);
         }
-        finally
+        finally { restore(); }
+    }
+
+    private static void AdvanceVisual(Node owner, string field, double seconds)
+    {
+        if (AccessTools.Field(owner.GetType(), field)?.GetValue(owner) is Tween tween && tween.IsValid())
+            tween.CustomStep(seconds);
+    }
+
+    private Action HideFrameOverlays(bool albumFrame, bool combat = false, bool map = false)
+    {
+        var caption = albumFrame ? tree.Root.GetNodeOrNull<CanvasLayer>("ReplayDecisionCaption") : null;
+        bool captionVisible = caption?.Visible == true;
+        var scene = map ? NMapScreen.Instance : combat ? (Node?)NCombatRoom.Instance : null;
+        var banners = scene?.GetChildren().OfType<Control>().Where(node => node.Visible &&
+            node is NActBanner or NPlayerTurnBanner or NEnemyTurnBanner or NCombatStartBanner).ToArray() ?? [];
+        bool panelVisible = panel.Visible;
+        if (captionVisible) caption!.Hide();
+        panel.Hide();
+        foreach (var banner in banners) banner.Hide();
+        return () =>
         {
             foreach (var banner in banners)
                 if (GodotObject.IsInstanceValid(banner) && !banner.IsQueuedForDeletion()) banner.Show();
-            if (destination != null && captionVisible && GodotObject.IsInstanceValid(caption)) caption!.Show();
-            panel.Show();
-        }
+            if (captionVisible && GodotObject.IsInstanceValid(caption)) caption!.Show();
+            if (panelVisible && GodotObject.IsInstanceValid(panel)) panel.Show();
+        };
     }
 
-    private async Task<Image> ReadPresentedFrame(CancellationToken token, bool albumFrame, MapCoord? route)
+    private async Task WaitForDraw(CancellationToken token)
     {
-        // At a decision boundary the playback clock can freeze a map fade halfway through.
-        // Advance visual tweens while the decision loop remains paused, then restore its clock.
-        double scale = Engine.TimeScale;
-        bool paused = tree.Paused;
-        NActBanner[] actBanners = [];
-        var clock = Stopwatch.StartNew();
+        bool drawn = false;
+        void Drawn() => drawn = true;
+        RenderingServer.FramePostDraw += Drawn;
         try
         {
-            if (albumFrame)
-            {
-                tree.Paused = false;
-                Engine.TimeScale = 4;
-                var map = NMapScreen.Instance;
-                var points = map?.GetNodeOrNull<Control>("TheMap/Points");
-                bool mapOpen = map?.IsOpen == true;
-                bool MapMoving() => mapOpen && (points == null || points.Modulate.A < .98f ||
-                    (HarmonyLib.AccessTools.Field(typeof(NMapScreen), "_actAnimTween")?.GetValue(map) is Tween t && t.IsValid() && t.IsRunning()));
-                // Let the original room draw its result. Poll native UI state
-                // first; texture readback is the expensive part on integrated GPUs.
-                do
-                {
-                    await tree.ToSignal(tree, SceneTree.SignalName.ProcessFrame);
-                    token.ThrowIfCancellationRequested();
-                } while (clock.ElapsedMilliseconds < (mapOpen ? 150 : 80) ||
-                    MapMoving() && clock.ElapsedMilliseconds < 2200);
-                if (MapMoving())
-                    throw new InvalidDataException("地图节点尚未显示。");
-                if (mapOpen && map != null)
-                {
-                    actBanners = tree.Root.FindChildren("*", "", true, false).OfType<NActBanner>().Where(n => n.IsVisibleInTree()).ToArray();
-                    foreach (var banner in actBanners) banner.Hide();
-                    if (route is { } point && RunManager.Instance.DebugOnlyGetState()?.Players.FirstOrDefault() is { } player)
-                    {
-                        RoomChoices.Ping(map, point, player);
-                        await tree.ToSignal(tree.CreateTimer(.06, true, false, true), SceneTreeTimer.SignalName.Timeout);
-                    }
-                }
-                await tree.ToSignal(RenderingServer.Singleton, RenderingServer.SignalName.FramePostDraw);
-            }
-            while (true)
+            var clock = Stopwatch.StartNew();
+            while (!drawn)
             {
                 token.ThrowIfCancellationRequested();
+                if (clock.Elapsed.TotalSeconds > 10)
+                    throw new TimeoutException(T("请恢复游戏窗口后重试截图。", "Restore the game window and try capturing again."));
+                await tree.ToSignal(tree, SceneTree.SignalName.ProcessFrame);
+            }
+        }
+        finally { RenderingServer.FramePostDraw -= Drawn; }
+    }
+
+    private async Task<Image> ReadSettledRoom(CancellationToken token)
+    {
+        // Other facility layouts can still need process time to become visible.
+        bool paused = tree.Paused;
+        double scale = Engine.TimeScale;
+        try
+        {
+            tree.Paused = false;
+            Engine.TimeScale = 4;
+            var clock = Stopwatch.StartNew();
+            await tree.ToSignal(tree.CreateTimer(.08, true, false, true), SceneTreeTimer.SignalName.Timeout);
+            do
+            {
+                await WaitForDraw(token);
                 var image = tree.Root.GetTexture().GetImage();
-                if (!albumFrame || image == null || image.IsEmpty()) return image!;
+                if (image == null || image.IsEmpty()) return image!;
                 float min = 1, max = 0;
                 for (int y = 1; y < 8; y++)
                     for (int x = 1; x < 12; x++)
@@ -625,24 +651,31 @@ internal sealed class ReplayToolbar
                         max = Math.Max(max, light);
                     }
                 if (max - min >= .09f) return image;
-                if (clock.Elapsed.TotalSeconds >= 2)
-                {
-                    image.Dispose();
-                    throw new InvalidDataException(T("此处仍在切换场景。", "The scene is still transitioning."));
-                }
                 image.Dispose();
-                if (paused) tree.Paused = false;
-                if (scale == 0) Engine.TimeScale = 1;
                 await tree.ToSignal(tree.CreateTimer(.1, true, false, true), SceneTreeTimer.SignalName.Timeout);
-            }
+            } while (clock.Elapsed.TotalSeconds < 2);
+            throw new InvalidDataException(T("此处仍在切换场景。", "The scene is still transitioning."));
         }
         finally
         {
-            foreach (var banner in actBanners)
-                if (GodotObject.IsInstanceValid(banner)) banner.Show();
             tree.Paused = paused;
             Engine.TimeScale = scale;
         }
+    }
+
+    private static void SaveImage(Image image, string directory, string filename, bool png)
+    {
+        if (image == null || image.IsEmpty())
+            throw new IOException(T("无法读取游戏画面。", "Could not read the game frame."));
+        string path = Path.Combine(directory, filename);
+        string pending = path + ".partial";
+        try
+        {
+            var error = png ? image.SavePng(pending) : image.SaveJpg(pending, 0.91f);
+            if (error != Godot.Error.Ok) throw new IOException($"{T("截图保存失败", "Could not save frame")} ({error})");
+            File.Move(pending, path, true);
+        }
+        finally { if (File.Exists(pending)) File.Delete(pending); }
     }
 
     private void Feedback(string text)

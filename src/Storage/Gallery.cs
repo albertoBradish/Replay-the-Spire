@@ -50,7 +50,7 @@ public static class Gallery
     internal static string WriteForum(string runId, string directory, CancellationToken token, int roomIndex = -1) =>
         WriteIndex(runId, roomIndex, directory, token);
 
-    internal sealed record CardMoment(int Decision, int Turn, string Title, long Damage, long Block)
+    internal sealed record CardMoment(int Decision, int Turn, string Card, string Title, long Damage, long Block)
     {
         internal string Caption => $"第 {Turn} 回合 · {Title}" + (Damage > 0 ? $"，实际扣血 {Damage}" : "") +
             (Block > 0 ? $"，获得格挡 {Block}" : "");
@@ -59,7 +59,7 @@ public static class Gallery
     internal static CardMoment? FeaturedCard(IEnumerable<ReplayEvent> events) => events
         .Where(e => e.ActionIndex > 0 && e.Card.Length > 0 && e.Amount > 0 && e.Kind is "damage" or "block")
         .GroupBy(e => (Decision: e.ActionIndex!.Value, e.Card, e.Turn))
-        .Select(g => new CardMoment(g.Key.Decision, g.Key.Turn, g.First().Label,
+        .Select(g => new CardMoment(g.Key.Decision, g.Key.Turn, g.Key.Card, g.First().Label,
             g.Where(e => e.Kind == "damage").Sum(e => (long)e.Amount), g.Where(e => e.Kind == "block").Sum(e => (long)e.Amount)))
         .OrderByDescending(m => m.Damage + m.Block).ThenBy(m => m.Decision).FirstOrDefault();
 

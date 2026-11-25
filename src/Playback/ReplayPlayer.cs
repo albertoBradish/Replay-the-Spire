@@ -17,6 +17,7 @@ public static class ReplayPlayer
     private static string lastStatus = "";
     private static double speed = 1;
     private static Task menuAssets = Task.CompletedTask;
+    private static IReadOnlySet<string>? retainedRunAssets;
     private static bool quitting;
 
     public static bool IsActive => current != null;
@@ -36,6 +37,7 @@ public static class ReplayPlayer
     public static bool IsRoomTimeline => current?.RoomEvents != null;
     public static int DecisionCount => current?.DecisionCount ?? 0;
     public static int CurrentDecision => current?.Decision ?? 0;
+    internal static int CurrentCombatDecision => current?.CombatDecision ?? 0;
     public static double Speed => speed;
     public static bool OriginalTiming { get; set; }
     public static string Status => current?.Status ?? lastStatus;
@@ -47,6 +49,8 @@ public static class ReplayPlayer
         RoomChoiceAnswers.Install(harmony);
         harmony.Patch(AccessTools.Method(typeof(AssetCache), nameof(AssetCache.CreateSession)),
             postfix: new HarmonyMethod(typeof(ReplayPlayer), nameof(AssetsStarted)));
+        harmony.Patch(AccessTools.Method(typeof(AssetCache), nameof(AssetCache.UnloadAssets)),
+            prefix: new HarmonyMethod(typeof(ReplayPlayer), nameof(KeepGalleryAssets)));
         harmony.Patch(AccessTools.Method(typeof(PreloadManager), nameof(PreloadManager.LoadCommonAndMainMenuAssets)),
             postfix: new HarmonyMethod(typeof(ReplayPlayer), nameof(WaitForMenuOnExit)));
         harmony.Patch(AccessTools.Method(typeof(NGame), nameof(NGame.Quit)),
@@ -65,10 +69,16 @@ public static class ReplayPlayer
     public static Task PlayDecisionAsync(byte[] combat, int decision) => PlayDecisionAsync(combat, decision, null);
 
     public static Task PlayDecisionAsync(byte[] combat, int decision, IReadOnlyList<ReplayEvent>? timeline) =>
-        StartAsync(combat, 0, checked(Math.Max(1, decision) + new BattleTimeline(timeline).Before.Length), null, timeline);
+        PlayDecisionAsync(combat, decision, timeline, keepRunAssets: false);
+
+    internal static Task PlayDecisionAsync(byte[] combat, int decision, IReadOnlyList<ReplayEvent>? timeline, bool keepRunAssets) =>
+        StartAsync(combat, 0, checked(Math.Max(1, decision) + new BattleTimeline(timeline).Before.Length), null, timeline, keepRunAssets);
 
     public static Task PlayRoomAsync(byte[] checkpoint, IReadOnlyList<ReplayEvent> events, int decision = 0) =>
-        StartAsync(checkpoint, 0, decision > 0 ? decision : -1, events);
+        PlayRoomAsync(checkpoint, events, decision, keepRunAssets: false);
+
+    internal static Task PlayRoomAsync(byte[] checkpoint, IReadOnlyList<ReplayEvent> events, int decision, bool keepRunAssets) =>
+        StartAsync(checkpoint, 0, decision > 0 ? decision : -1, events, keepRunAssets: keepRunAssets);
 
     public static Task SeekTurnAsync(int turn) =>
         current is { RoomEvents: null } session ? StartAsync(session.Data, Math.Max(1, turn), -1, null, session.CombatTimeline) : Task.CompletedTask;
@@ -91,7 +101,7 @@ public static class ReplayPlayer
     public static void Step() => current?.Step();
 
     private static async Task StartAsync(byte[] data, int turn, int decision, IReadOnlyList<ReplayEvent>? roomEvents,
-        IReadOnlyList<ReplayEvent>? combatTimeline = null)
+        IReadOnlyList<ReplayEvent>? combatTimeline = null, bool keepRunAssets = false)
     {
         await transition.WaitAsync();
         try
@@ -112,7 +122,7 @@ public static class ReplayPlayer
                 replay = new CombatReplay { serializableRun = save };
             }
             if (current != null)
-                await CloseAsync();
+                await CloseAsync(keepRunAssets);
             // Returning to the menu schedules this native preload without awaiting
             // its completion. Its worker must release shared assets before relaunch.
             await menuAssets;
@@ -156,11 +166,14 @@ public static class ReplayPlayer
         }
     }
 
-    private static async Task CloseAsync()
+    private static async Task CloseAsync(bool keepRunAssets = false)
     {
         if (current is not { } session)
             return;
         session.Cancel();
+        // The temporary menu between gallery rooms can keep the current character's
+        // assets. The native scene teardown and the final return still run normally.
+        retainedRunAssets = keepRunAssets ? AssetSets.RunSet : null;
         try
         {
             if (RunManager.Instance.IsInProgress)
@@ -168,6 +181,7 @@ public static class ReplayPlayer
         }
         finally
         {
+            retainedRunAssets = null;
             // The normal menu transition calls CleanUp before constructing its profile buttons.
             // Recover here too if startup failed before the native run was installed.
             if (ReferenceEquals(current, session))
@@ -183,6 +197,12 @@ public static class ReplayPlayer
         ReplaySandbox.Leave();
         lastStatus = session.Status;
         current = null;
+    }
+
+    private static void KeepGalleryAssets(AssetCache __instance, ref IEnumerable<string> __0)
+    {
+        if (ReferenceEquals(__instance, PreloadManager.Cache) && retainedRunAssets is { } keep)
+            __0 = __0.Where(path => !keep.Contains(path));
     }
 
     private static void AssetsStarted(string name, AssetLoadingSession __result)

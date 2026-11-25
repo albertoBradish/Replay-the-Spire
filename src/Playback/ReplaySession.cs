@@ -63,6 +63,7 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
     internal bool Seeking => seeking;
     internal int Cursor { get; private set; }
     internal int Decision { get; private set; }
+    internal int CombatDecision => RoomEvents == null ? Decision - timeline.Before.Length : 0;
     internal int Turn => RoomEvents != null ? 0 : CombatManager.Instance.DebugOnlyGetState()?.RoundNumber ?? lastTurn;
     internal string Status { get; private set; } = "正在载入战斗";
 

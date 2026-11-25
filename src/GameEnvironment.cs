@@ -23,6 +23,7 @@ public static class Bootstrap
             () => GameEnvironment.Build, () => GameEnvironment.Mods, ex => GD.PushWarning($"[SpireReplay] {ex.Message}"));
         var harmony = new Harmony("io.github.albertobradish.replaythespire");
         Playback.ReplayPlayer.Install(harmony);
+        Interface.GalleryHit.Install(harmony);
         Capture.CaptureHooks.Install(harmony);
         Interface.ReplayUi.Install(harmony);
         GD.Print("[SpireReplay] Ready");
