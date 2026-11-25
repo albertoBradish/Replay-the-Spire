@@ -5,6 +5,7 @@ using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Nodes.Cards;
 using MegaCrit.Sts2.Core.Nodes.Combat;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
+using MegaCrit.Sts2.Core.Nodes.Screens.Map;
 using MegaCrit.Sts2.Core.Nodes.Vfx;
 using SpireReplay.Playback;
 
@@ -70,12 +71,15 @@ internal sealed class GalleryHit : IDisposable
     }
 
     private static bool Showing(NCard? card) => GodotObject.IsInstanceValid(card) && card!.IsVisibleInTree() &&
-        card.Body.Scale.X >= .35f && card.GetGlobalRect().Intersects(card.GetViewportRect());
+        card.Body.Scale.X >= .35f && card.Modulate.A > .5f &&
+        card.GetViewportRect().HasPoint(card.GetGlobalRect().GetCenter());
 
     private void PrepareFrame()
     {
         if (image != null || failure != null || restore != null || NCombatRoom.Instance == null ||
-            Engine.GetProcessFrames() < drawAfter || !GodotObject.IsInstanceValid(damage) || !damage!.IsVisibleInTree() ||
+            Engine.GetProcessFrames() < drawAfter || RewardChoices.Visible || NMapScreen.Instance?.IsOpen == true ||
+            !GodotObject.IsInstanceValid(damage) || !damage!.IsVisibleInTree() ||
+            !damage.GetViewportRect().HasPoint(damage.GetGlobalTransformWithCanvas().Origin) ||
             !(Showing(playedCard) || Showing(flyingCard)))
             return;
         restore = hideOverlays();

@@ -5,6 +5,7 @@ using MegaCrit.Sts2.Core.Nodes.Rooms;
 using MegaCrit.Sts2.Core.Nodes.Screens;
 using MegaCrit.Sts2.Core.Nodes.Screens.Overlays;
 using MegaCrit.Sts2.Core.Nodes.Vfx;
+using MegaCrit.Sts2.Core.Nodes.Vfx.Utilities;
 using MegaCrit.Sts2.Core.Nodes.Screens.Map;
 using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Map;
@@ -510,12 +511,18 @@ internal sealed class ReplayToolbar
         albumOpening = TimeSpan.Zero;
         double savedSpeed = ReplayPlayer.Speed;
         bool originalTiming = ReplayPlayer.OriginalTiming;
+        var game = NGame.Instance;
+        var shake = game?.GetNodeOrNull<NScreenShake>("ScreenShake");
+        float? shakeMultiplier = shake == null ? null :
+            AccessTools.Field(typeof(NScreenShake), "_multiplier")?.GetValue(shake) as float?;
         cancelAlbum.Visible = true;
         exit.Disabled = collapse.Disabled = true;
         try
         {
             ReplayPlayer.OriginalTiming = false;
             ReplayPlayer.SetSpeed(8);
+            // Accelerated impact effects can displace the camera beyond the viewport.
+            if (shakeMultiplier.HasValue) game!.SetScreenshakeMultiplier(0);
             await capture(cancellation.Token);
         }
         finally
@@ -523,6 +530,8 @@ internal sealed class ReplayToolbar
             album = null;
             ReplayPlayer.OriginalTiming = originalTiming;
             ReplayPlayer.SetSpeed(savedSpeed);
+            if (shakeMultiplier is float multiplier && GodotObject.IsInstanceValid(game))
+                game!.SetScreenshakeMultiplier(multiplier);
             cancelAlbum.Visible = false;
             exit.Disabled = collapse.Disabled = false;
         }
@@ -592,11 +601,14 @@ internal sealed class ReplayToolbar
     {
         var caption = albumFrame ? tree.Root.GetNodeOrNull<CanvasLayer>("ReplayDecisionCaption") : null;
         bool captionVisible = caption?.Visible == true;
+        var transition = albumFrame ? NGame.Instance?.Transition : null;
+        bool transitionVisible = transition?.Visible == true;
         var scene = map ? NMapScreen.Instance : combat ? (Node?)NCombatRoom.Instance : null;
         var banners = scene?.GetChildren().OfType<Control>().Where(node => node.Visible &&
             node is NActBanner or NPlayerTurnBanner or NEnemyTurnBanner or NCombatStartBanner).ToArray() ?? [];
         bool panelVisible = panel.Visible;
         if (captionVisible) caption!.Hide();
+        if (transitionVisible) transition!.Hide();
         panel.Hide();
         foreach (var banner in banners) banner.Hide();
         return () =>
@@ -604,6 +616,7 @@ internal sealed class ReplayToolbar
             foreach (var banner in banners)
                 if (GodotObject.IsInstanceValid(banner) && !banner.IsQueuedForDeletion()) banner.Show();
             if (captionVisible && GodotObject.IsInstanceValid(caption)) caption!.Show();
+            if (transitionVisible && GodotObject.IsInstanceValid(transition)) transition!.Show();
             if (panelVisible && GodotObject.IsInstanceValid(panel)) panel.Show();
         };
     }
