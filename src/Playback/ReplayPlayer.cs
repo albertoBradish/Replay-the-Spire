@@ -69,16 +69,16 @@ public static class ReplayPlayer
     public static Task PlayDecisionAsync(byte[] combat, int decision) => PlayDecisionAsync(combat, decision, null);
 
     public static Task PlayDecisionAsync(byte[] combat, int decision, IReadOnlyList<ReplayEvent>? timeline) =>
-        PlayDecisionAsync(combat, decision, timeline, keepRunAssets: false);
+        PlayDecisionAsync(combat, decision, timeline, galleryCapture: false);
 
-    internal static Task PlayDecisionAsync(byte[] combat, int decision, IReadOnlyList<ReplayEvent>? timeline, bool keepRunAssets) =>
-        StartAsync(combat, 0, checked(Math.Max(1, decision) + new BattleTimeline(timeline).Before.Length), null, timeline, keepRunAssets);
+    internal static Task PlayDecisionAsync(byte[] combat, int decision, IReadOnlyList<ReplayEvent>? timeline, bool galleryCapture) =>
+        StartAsync(combat, 0, checked(Math.Max(1, decision) + new BattleTimeline(timeline).Before.Length), null, timeline, galleryCapture);
 
     public static Task PlayRoomAsync(byte[] checkpoint, IReadOnlyList<ReplayEvent> events, int decision = 0) =>
-        PlayRoomAsync(checkpoint, events, decision, keepRunAssets: false);
+        PlayRoomAsync(checkpoint, events, decision, galleryCapture: false);
 
-    internal static Task PlayRoomAsync(byte[] checkpoint, IReadOnlyList<ReplayEvent> events, int decision, bool keepRunAssets) =>
-        StartAsync(checkpoint, 0, decision > 0 ? decision : -1, events, keepRunAssets: keepRunAssets);
+    internal static Task PlayRoomAsync(byte[] checkpoint, IReadOnlyList<ReplayEvent> events, int decision, bool galleryCapture) =>
+        StartAsync(checkpoint, 0, decision > 0 ? decision : -1, events, galleryCapture: galleryCapture);
 
     public static Task SeekTurnAsync(int turn) =>
         current is { RoomEvents: null } session ? StartAsync(session.Data, Math.Max(1, turn), -1, null, session.CombatTimeline) : Task.CompletedTask;
@@ -97,11 +97,12 @@ public static class ReplayPlayer
     }
 
     internal static void AdvanceToPhoto(int decision) => current?.AdvanceToPhoto(decision);
+    internal static void ImpactFrameCaptured() => current?.ImpactFrameCaptured();
 
     public static void Step() => current?.Step();
 
     private static async Task StartAsync(byte[] data, int turn, int decision, IReadOnlyList<ReplayEvent>? roomEvents,
-        IReadOnlyList<ReplayEvent>? combatTimeline = null, bool keepRunAssets = false)
+        IReadOnlyList<ReplayEvent>? combatTimeline = null, bool galleryCapture = false)
     {
         await transition.WaitAsync();
         try
@@ -122,13 +123,13 @@ public static class ReplayPlayer
                 replay = new CombatReplay { serializableRun = save };
             }
             if (current != null)
-                await CloseAsync(keepRunAssets);
+                await CloseAsync(galleryCapture);
             // Returning to the menu schedules this native preload without awaiting
             // its completion. Its worker must release shared assets before relaunch.
             await menuAssets;
             if (SaveManager.Instance.CurrentRunSaveTask is { } pendingSave)
                 await pendingSave;
-            var session = new ReplaySession(data, replay, turn, decision, roomEvents, combatTimeline);
+            var session = new ReplaySession(data, replay, turn, decision, roomEvents, combatTimeline, galleryCapture);
             current = session;
             try
             {
@@ -166,14 +167,14 @@ public static class ReplayPlayer
         }
     }
 
-    private static async Task CloseAsync(bool keepRunAssets = false)
+    private static async Task CloseAsync(bool galleryCapture = false)
     {
         if (current is not { } session)
             return;
         session.Cancel();
         // The temporary menu between gallery rooms can keep the current character's
         // assets. The native scene teardown and the final return still run normally.
-        retainedRunAssets = keepRunAssets ? AssetSets.RunSet : null;
+        retainedRunAssets = galleryCapture ? AssetSets.RunSet : null;
         try
         {
             if (RunManager.Instance.IsInProgress)

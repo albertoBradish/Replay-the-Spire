@@ -20,7 +20,7 @@ using MegaCrit.Sts2.Core.Runs;
 namespace SpireReplay.Playback;
 
 internal sealed class ReplaySession(byte[] data, CombatReplay replay, int targetTurn, int targetDecision,
-    IReadOnlyList<ReplayEvent>? roomEvents, IReadOnlyList<ReplayEvent>? combatTimeline)
+    IReadOnlyList<ReplayEvent>? roomEvents, IReadOnlyList<ReplayEvent>? combatTimeline, bool galleryCapture)
 {
     private readonly SceneTree tree = NGame.Instance!.GetTree();
     private readonly double previousTimeScale = Engine.TimeScale;
@@ -32,6 +32,7 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
     private int verifiedCount;
     private int lastTurn;
     private bool seeking = targetTurn > 0 || targetDecision >= 0;
+    private bool impactCaptured;
     private bool stepToNext;
     private int stepFrom;
     private int? nextPhotoDecision;
@@ -142,12 +143,22 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
 
     internal void RememberEventLayout(Task setup) => eventLayout = setup;
 
+    private double SeekSpeed => galleryCapture && RoomEvents == null && !impactCaptured &&
+        CombatDecision > 0 && Decision + 1 == targetDecision ? 2 : 8;
+
+    internal void ImpactFrameCaptured()
+    {
+        if (!galleryCapture || impactCaptured) return;
+        impactCaptured = true;
+        RefreshClock();
+    }
+
     internal void RefreshClock()
     {
         if (!Ready || Closing)
             return;
         tree.Paused = Paused;
-        Engine.TimeScale = Paused ? 0 : previousTimeScale * (seeking ? 8 : ReplayPlayer.Speed);
+        Engine.TimeScale = Paused ? 0 : previousTimeScale * (seeking ? SeekSpeed : ReplayPlayer.Speed);
     }
 
     internal void SetPaused(bool paused)
@@ -251,7 +262,12 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
                         if (action.ActionType == GameActionType.CombatPlayPhaseOnly)
                             await Until(() => CombatManager.Instance.DebugOnlyGetState()?.CurrentSide == CombatSide.Player);
                         if (decision)
+                        {
                             Decision++;
+                            // Only the featured action needs enough render updates to show its impact.
+                            if (galleryCapture && seeking && (Decision == targetDecision - 1 || Decision == targetDecision))
+                                RefreshClock();
+                        }
                         if (entry.action is NetEndPlayerTurnAction ending)
                         {
                             await Until(() => run.Players[0].PlayerCombatState?.TurnNumber == ending.turnNumber);
@@ -288,6 +304,7 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
                 Cursor++;
             }
             await Until(() => !executor.IsRunning && verifiedCount == expected.Count);
+            ImpactFrameCaptured();
             Verified = verifiedCount > 0;
             if (tracker != null)
                 tracker.ChecksumGenerated -= Verify;
@@ -450,7 +467,7 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
             await tree.ToSignal(tree, SceneTree.SignalName.ProcessFrame);
             long now = Stopwatch.GetTimestamp();
             if (!Paused)
-                remaining -= Stopwatch.GetElapsedTime(previous, now).TotalSeconds * (seeking ? 8 : ReplayPlayer.Speed);
+                remaining -= Stopwatch.GetElapsedTime(previous, now).TotalSeconds * (seeking ? SeekSpeed : ReplayPlayer.Speed);
             previous = now;
         }
     }

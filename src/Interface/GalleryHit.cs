@@ -70,9 +70,15 @@ internal sealed class GalleryHit : IDisposable
             shot.flyingCard = card;
     }
 
-    private static bool Showing(NCard? card) => GodotObject.IsInstanceValid(card) && card!.IsVisibleInTree() &&
-        card.Body.Scale.X >= .35f && card.Modulate.A > .5f &&
-        card.GetViewportRect().HasPoint(card.GetGlobalRect().GetCenter());
+    private static bool Showing(NCard? card)
+    {
+        if (!GodotObject.IsInstanceValid(card) || !card!.IsVisibleInTree() || card.Body.Scale.X < .35f ||
+            !card.GetViewportRect().HasPoint(card.GetGlobalRect().GetCenter()))
+            return false;
+        for (Node? node = card.Body; node is CanvasItem canvas; node = node.GetParent())
+            if (canvas.Modulate.A < .65f) return false;
+        return true;
+    }
 
     private void PrepareFrame()
     {
@@ -88,7 +94,11 @@ internal sealed class GalleryHit : IDisposable
     private void ReadFrame()
     {
         if (restore == null) return;
-        try { image = tree.Root.GetTexture().GetImage(); }
+        try
+        {
+            image = tree.Root.GetTexture().GetImage();
+            if (image != null && !image.IsEmpty()) ReplayPlayer.ImpactFrameCaptured();
+        }
         catch (Exception error) { failure = error; }
         finally
         {

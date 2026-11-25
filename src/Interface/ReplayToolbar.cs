@@ -165,11 +165,11 @@ internal sealed class ReplayToolbar
             previousStatus = "";
             if (data.Combat is { Length: > 0 } combat)
             {
-                if (decision is > 0) await ReplayPlayer.PlayDecisionAsync(combat, decision.Value, data.Events, keepRunAssets: album != null);
+                if (decision is > 0) await ReplayPlayer.PlayDecisionAsync(combat, decision.Value, data.Events, galleryCapture: album != null);
                 else await ReplayPlayer.PlayAsync(combat, turn, data.Events);
             }
             else if (data.Checkpoint is { Length: > 0 } checkpoint)
-                await ReplayPlayer.PlayRoomAsync(checkpoint, data.Events, decision ?? 0, keepRunAssets: album != null);
+                await ReplayPlayer.PlayRoomAsync(checkpoint, data.Events, decision ?? 0, galleryCapture: album != null);
             else
             {
                 if (ReplayPlayer.IsActive) await ReplayPlayer.StopAsync();
