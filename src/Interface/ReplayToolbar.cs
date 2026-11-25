@@ -478,7 +478,8 @@ internal sealed class ReplayToolbar
                 await WaitAtDecision(token);
                 if (ReplayPlayer.HasError) throw new InvalidDataException(ReplayPlayer.Status);
             }
-            if (RewardChoices.Visible)
+            // The final boss can open a proceed-only reward screen without rendering a reward panel.
+            if (NOverlayStack.Instance?.Peek() is NRewardsScreen { IsComplete: false })
                 await WriteFrame("rewards.jpg", token, directory);
             return;
         }
@@ -547,7 +548,7 @@ internal sealed class ReplayToolbar
             throw new InvalidOperationException(T("请在图形窗口中截取画面。", "Open the graphical game to capture a frame."));
         bool albumFrame = destination != null;
         var map = albumFrame && NMapScreen.Instance?.IsOpen == true ? NMapScreen.Instance : null;
-        var rewards = albumFrame ? NOverlayStack.Instance?.Peek() as NRewardsScreen : null;
+        var rewards = albumFrame && NOverlayStack.Instance?.Peek() is NRewardsScreen { IsComplete: false } screen ? screen : null;
 
         if (map != null)
         {
