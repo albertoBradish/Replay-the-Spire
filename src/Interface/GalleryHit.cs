@@ -19,7 +19,7 @@ internal sealed class GalleryHit : IDisposable
     private readonly Gallery.CardMoment moment;
     private readonly Func<Action> hideOverlays;
     private NDamageNumVfx? damage;
-    private NHealthBar? healthBar;
+    private ulong drawAfter;
     private NCard? playedCard;
     private NCard? flyingCard;
     private Image? image;
@@ -54,8 +54,11 @@ internal sealed class GalleryHit : IDisposable
             return;
         var room = NCombatRoom.Instance;
         shot.damage = __result;
-        shot.healthBar = room?.GetCreatureNode(target)?.GetNodeOrNull<NCreatureStateDisplay>("%HealthBar")
+        // The game has applied the damage, but it defers refreshing the creature's UI.
+        var healthBar = room?.GetCreatureNode(target)?.GetNodeOrNull<NCreatureStateDisplay>("%HealthBar")
             ?.GetNodeOrNull<NHealthBar>("%HealthBar");
+        healthBar?.RefreshValues();
+        shot.drawAfter = Engine.GetProcessFrames() + 1;
         shot.playedCard = room?.Ui.PlayContainer.GetChildren().OfType<NCard>().FirstOrDefault(shot.Matches);
     }
 
@@ -72,11 +75,9 @@ internal sealed class GalleryHit : IDisposable
     private void PrepareFrame()
     {
         if (image != null || failure != null || restore != null || NCombatRoom.Instance == null ||
-            !GodotObject.IsInstanceValid(damage) || !damage!.IsVisibleInTree() ||
+            Engine.GetProcessFrames() < drawAfter || !GodotObject.IsInstanceValid(damage) || !damage!.IsVisibleInTree() ||
             !(Showing(playedCard) || Showing(flyingCard)))
             return;
-        // Damage has updated the creature, but the normal combat UI refresh may run a frame later.
-        if (GodotObject.IsInstanceValid(healthBar)) healthBar!.RefreshValues();
         restore = hideOverlays();
     }
 
