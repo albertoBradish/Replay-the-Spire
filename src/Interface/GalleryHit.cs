@@ -3,6 +3,7 @@ using HarmonyLib;
 using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Nodes.Cards;
+using MegaCrit.Sts2.Core.Nodes.Combat;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
 using MegaCrit.Sts2.Core.Nodes.Vfx;
 using SpireReplay.Playback;
@@ -18,6 +19,7 @@ internal sealed class GalleryHit : IDisposable
     private readonly Gallery.CardMoment moment;
     private readonly Func<Action> hideOverlays;
     private NDamageNumVfx? damage;
+    private NHealthBar? healthBar;
     private NCard? playedCard;
     private NCard? flyingCard;
     private Image? image;
@@ -50,8 +52,11 @@ internal sealed class GalleryHit : IDisposable
         if (active is not { image: null, failure: null } shot || !shot.AtDecision || __result == null ||
             target.Side != CombatSide.Enemy || result.UnblockedDamage <= 0)
             return;
+        var room = NCombatRoom.Instance;
         shot.damage = __result;
-        shot.playedCard = NCombatRoom.Instance?.Ui.PlayContainer.GetChildren().OfType<NCard>().FirstOrDefault(shot.Matches);
+        shot.healthBar = room?.GetCreatureNode(target)?.GetNodeOrNull<NCreatureStateDisplay>("%HealthBar")
+            ?.GetNodeOrNull<NHealthBar>("%HealthBar");
+        shot.playedCard = room?.Ui.PlayContainer.GetChildren().OfType<NCard>().FirstOrDefault(shot.Matches);
     }
 
     private static void CardMoving(NCardFlyVfx __instance)
@@ -70,6 +75,8 @@ internal sealed class GalleryHit : IDisposable
             !GodotObject.IsInstanceValid(damage) || !damage!.IsVisibleInTree() ||
             !(Showing(playedCard) || Showing(flyingCard)))
             return;
+        // Damage has updated the creature, but the normal combat UI refresh may run a frame later.
+        if (GodotObject.IsInstanceValid(healthBar)) healthBar!.RefreshValues();
         restore = hideOverlays();
     }
 
