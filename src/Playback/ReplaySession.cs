@@ -32,7 +32,7 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
     private int verifiedCount;
     private int lastTurn;
     private bool seeking = targetTurn > 0 || targetDecision >= 0;
-    private bool impactCaptured;
+    private bool impactSamplingEnded;
     private bool stepToNext;
     private int stepFrom;
     private int? nextPhotoDecision;
@@ -143,13 +143,13 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
 
     internal void RememberEventLayout(Task setup) => eventLayout = setup;
 
-    private double SeekSpeed => galleryCapture && RoomEvents == null && !impactCaptured &&
+    private double SeekSpeed => galleryCapture && RoomEvents == null && !impactSamplingEnded &&
         CombatDecision > 0 && Decision + 1 == targetDecision ? 2 : 8;
 
-    internal void ImpactFrameCaptured()
+    internal void EndImpactSampling()
     {
-        if (!galleryCapture || impactCaptured) return;
-        impactCaptured = true;
+        if (!galleryCapture || impactSamplingEnded) return;
+        impactSamplingEnded = true;
         RefreshClock();
     }
 
@@ -304,7 +304,7 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
                 Cursor++;
             }
             await Until(() => !executor.IsRunning && verifiedCount == expected.Count);
-            ImpactFrameCaptured();
+            EndImpactSampling();
             Verified = verifiedCount > 0;
             if (tracker != null)
                 tracker.ChecksumGenerated -= Verify;

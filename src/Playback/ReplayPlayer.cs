@@ -97,7 +97,7 @@ public static class ReplayPlayer
     }
 
     internal static void AdvanceToPhoto(int decision) => current?.AdvanceToPhoto(decision);
-    internal static void ImpactFrameCaptured() => current?.ImpactFrameCaptured();
+    internal static void EndImpactSampling() => current?.EndImpactSampling();
 
     public static void Step() => current?.Step();
 

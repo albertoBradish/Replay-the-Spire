@@ -59,7 +59,7 @@ internal sealed class GalleryHit : IDisposable
         var healthBar = room?.GetCreatureNode(target)?.GetNodeOrNull<NCreatureStateDisplay>("%HealthBar")
             ?.GetNodeOrNull<NHealthBar>("%HealthBar");
         healthBar?.RefreshValues();
-        shot.drawAfter = Engine.GetProcessFrames() + 1;
+        shot.drawAfter = Engine.GetProcessFrames() + (target.IsDead ? 0UL : 1UL);
         shot.playedCard = room?.Ui.PlayContainer.GetChildren().OfType<NCard>().FirstOrDefault(shot.Matches);
     }
 
@@ -97,7 +97,7 @@ internal sealed class GalleryHit : IDisposable
         try
         {
             image = tree.Root.GetTexture().GetImage();
-            if (image != null && !image.IsEmpty()) ReplayPlayer.ImpactFrameCaptured();
+            if (image != null && !image.IsEmpty()) ReplayPlayer.EndImpactSampling();
         }
         catch (Exception error) { failure = error; }
         finally
