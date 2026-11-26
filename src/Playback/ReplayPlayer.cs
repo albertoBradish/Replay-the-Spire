@@ -6,6 +6,7 @@ using MegaCrit.Sts2.Core.Nodes.Rooms;
 using MegaCrit.Sts2.Core.Runs;
 using MegaCrit.Sts2.Core.Saves;
 using MegaCrit.Sts2.Core.Multiplayer.Replay;
+using System.Diagnostics;
 using System.Text.Json;
 
 namespace SpireReplay.Playback;
@@ -17,7 +18,7 @@ public static class ReplayPlayer
     private static string lastStatus = "";
     private static double speed = 1;
     private static Task menuAssets = Task.CompletedTask;
-    private static IReadOnlySet<string>? retainedRunAssets;
+    private static bool replacingGalleryRoom;
     private static bool quitting;
 
     public static bool IsActive => current != null;
@@ -45,12 +46,11 @@ public static class ReplayPlayer
     public static void Install(Harmony harmony)
     {
         ReplaySandbox.Install(harmony);
+        ReplayCardEffects.Install(harmony);
         ReplayDecoder.Install(harmony);
         RoomChoiceAnswers.Install(harmony);
         harmony.Patch(AccessTools.Method(typeof(AssetCache), nameof(AssetCache.CreateSession)),
             postfix: new HarmonyMethod(typeof(ReplayPlayer), nameof(AssetsStarted)));
-        harmony.Patch(AccessTools.Method(typeof(AssetCache), nameof(AssetCache.UnloadAssets)),
-            prefix: new HarmonyMethod(typeof(ReplayPlayer), nameof(KeepGalleryAssets)));
         harmony.Patch(AccessTools.Method(typeof(PreloadManager), nameof(PreloadManager.LoadCommonAndMainMenuAssets)),
             postfix: new HarmonyMethod(typeof(ReplayPlayer), nameof(WaitForMenuOnExit)));
         harmony.Patch(AccessTools.Method(typeof(NGame), nameof(NGame.Quit)),
@@ -122,19 +122,33 @@ public static class ReplayPlayer
                     throw new InvalidDataException("需要单人房间记录。");
                 replay = new CombatReplay { serializableRun = save };
             }
-            if (current != null)
-                await CloseAsync(galleryCapture);
-            // Returning to the menu schedules this native preload without awaiting
-            // its completion. Its worker must release shared assets before relaunch.
-            await menuAssets;
-            if (SaveManager.Instance.CurrentRunSaveTask is { } pendingSave)
-                await pendingSave;
-            var session = new ReplaySession(data, replay, turn, decision, roomEvents, combatTimeline, galleryCapture);
-            current = session;
             try
             {
+                bool direct = galleryCapture && current is { Ready: true } && RunManager.Instance.IsInProgress;
+                bool warmCharacter = false, warmAct = false;
+                long closeStarted = Stopwatch.GetTimestamp();
+                if (direct)
+                {
+                    var previous = current!;
+                    var oldSave = previous.Replay.serializableRun;
+                    var nextSave = replay.serializableRun;
+                    warmCharacter = AssetSets.RunSet != null && oldSave.Players[0].CharacterId == nextSave.Players[0].CharacterId;
+                    warmAct = warmCharacter && oldSave.CurrentActIndex == nextSave.CurrentActIndex &&
+                        oldSave.Acts[oldSave.CurrentActIndex].Id == nextSave.Acts[nextSave.CurrentActIndex].Id;
+                    await CloseGalleryRoomAsync(game, previous);
+                }
+                else if (current != null)
+                    await CloseAsync();
+                // A pre-existing menu preload must finish before its cache can be used by a run.
+                await menuAssets;
+                if (SaveManager.Instance.CurrentRunSaveTask is { } pendingSave)
+                    await pendingSave;
+                if (galleryCapture)
+                    GD.Print($"[SpireReplay] Gallery switch direct={direct} close_ms={Stopwatch.GetElapsedTime(closeStarted).TotalMilliseconds:F0}");
+                var session = new ReplaySession(data, replay, turn, decision, roomEvents, combatTimeline, galleryCapture);
+                current = session;
                 ReplaySandbox.Enter();
-                await session.StartAsync();
+                await session.StartAsync(warmCharacter, warmAct);
             }
             catch
             {
@@ -167,22 +181,19 @@ public static class ReplayPlayer
         }
     }
 
-    private static async Task CloseAsync(bool galleryCapture = false)
+    private static async Task CloseAsync()
     {
         if (current is not { } session)
             return;
         session.Cancel();
-        // The temporary menu between gallery rooms can keep the current character's
-        // assets. The native scene teardown and the final return still run normally.
-        retainedRunAssets = galleryCapture ? AssetSets.RunSet : null;
         try
         {
-            if (RunManager.Instance.IsInProgress)
-                await NGame.Instance!.ReturnToMainMenu();
+            var game = NGame.Instance!;
+            if (RunManager.Instance.IsInProgress || game.MainMenu == null)
+                await game.ReturnToMainMenu();
         }
         finally
         {
-            retainedRunAssets = null;
             // The normal menu transition calls CleanUp before constructing its profile buttons.
             // Recover here too if startup failed before the native run was installed.
             if (ReferenceEquals(current, session))
@@ -190,20 +201,31 @@ public static class ReplayPlayer
         }
     }
 
+    private static async Task CloseGalleryRoomAsync(NGame game, ReplaySession previous)
+    {
+        var tree = game.GetTree();
+        replacingGalleryRoom = true;
+        try
+        {
+            previous.Cancel();
+            await previous.Playback;
+            RunManager.Instance.CleanUp();
+            game.RootSceneContainer.SetCurrentScene(new Control());
+            // Leave the old scene and drain its deferred calls before constructing the next run.
+            await tree.ToSignal(tree, SceneTree.SignalName.ProcessFrame);
+            await tree.ToSignal(tree, SceneTree.SignalName.ProcessFrame);
+        }
+        finally { replacingGalleryRoom = false; }
+    }
+
     internal static void OnRunCleanedUp()
     {
-        if (quitting || current is not { } session)
+        if (quitting || replacingGalleryRoom || current is not { } session)
             return;
         session.Cancel();
         ReplaySandbox.Leave();
         lastStatus = session.Status;
         current = null;
-    }
-
-    private static void KeepGalleryAssets(AssetCache __instance, ref IEnumerable<string> __0)
-    {
-        if (ReferenceEquals(__instance, PreloadManager.Cache) && retainedRunAssets is { } keep)
-            __0 = __0.Where(path => !keep.Contains(path));
     }
 
     private static void AssetsStarted(string name, AssetLoadingSession __result)

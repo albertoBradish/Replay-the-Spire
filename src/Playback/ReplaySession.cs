@@ -38,6 +38,7 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
     private int? nextPhotoDecision;
     private DecisionCaption? caption;
     private Task eventLayout = Task.CompletedTask;
+    internal Task Playback { get; private set; } = Task.CompletedTask;
     private readonly BattleTimeline timeline = new(combatTimeline);
     private readonly Dictionary<int, double> decisionTimes = combatTimeline?
         .Where(e => e.Kind == "choice" && e.ActionKey == "combat" && e.ActionIndex.HasValue &&
@@ -68,7 +69,7 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
     internal int Turn => RoomEvents != null ? 0 : CombatManager.Instance.DebugOnlyGetState()?.RoundNumber ?? lastTurn;
     internal string Status { get; private set; } = "正在载入战斗";
 
-    internal async Task StartAsync()
+    internal async Task StartAsync(bool warmCharacter, bool warmAct)
     {
         var run = RunState.FromSerializable(Replay.serializableRun);
         var player = run.Players.Single();
@@ -77,8 +78,11 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
         manager.CombatStateSynchronizer.IsDisabled = true;
         manager.CombatReplayWriter.IsEnabled = false;
 
-        await PreloadManager.LoadRunAssets([player.Character]);
-        await PreloadManager.LoadActAssets(run.Act);
+        long assetsStarted = Stopwatch.GetTimestamp();
+        if (!warmCharacter) await PreloadManager.LoadRunAssets([player.Character]);
+        if (!warmAct) await PreloadManager.LoadActAssets(run.Act);
+        double preloadMilliseconds = Stopwatch.GetElapsedTime(assetsStarted).TotalMilliseconds;
+        long restoreStarted = Stopwatch.GetTimestamp();
         CheckActive();
         manager.Launch();
         NAudioManager.Instance?.StopMusic();
@@ -138,7 +142,9 @@ internal sealed class ReplaySession(byte[] data, CombatReplay replay, int target
         Ready = true;
         Status = seeking ? "正在定位" : "播放中";
         RefreshClock();
-        _ = RoomEvents == null ? FeedAsync(run) : ShowRoomAsync(run, RoomEvents);
+        if (galleryCapture)
+            GD.Print($"[SpireReplay] Gallery room floor={run.TotalFloor} preload_ms={preloadMilliseconds:F0} restore_ms={Stopwatch.GetElapsedTime(restoreStarted).TotalMilliseconds:F0}");
+        Playback = RoomEvents == null ? FeedAsync(run) : ShowRoomAsync(run, RoomEvents);
     }
 
     internal void RememberEventLayout(Task setup) => eventLayout = setup;

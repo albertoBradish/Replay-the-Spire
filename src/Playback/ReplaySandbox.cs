@@ -13,6 +13,7 @@ namespace SpireReplay.Playback;
 internal static class ReplaySandbox
 {
     private static SaveManager? isolated;
+    private static SaveManager? playerProfile;
 
     internal static void Install(Harmony harmony)
     {
@@ -32,7 +33,7 @@ internal static class ReplaySandbox
 
     internal static void Enter()
     {
-        var original = SaveManager.Instance;
+        var original = playerProfile ??= SaveManager.Instance;
         var profile = original.CurrentProfileId;
         var memory = new MockGodotFileIo("replay-memory") { getCurrentTime = () => DateTimeOffset.UtcNow };
         memory.WriteFile(SettingsSaveManager.settingsSaveFileName, SaveManager.ToJson(original.SettingsSave));
@@ -51,7 +52,11 @@ internal static class ReplaySandbox
         isolated = viewer;
     }
 
-    internal static void Leave() => isolated = null;
+    internal static void Leave()
+    {
+        isolated = null;
+        playerProfile = null;
+    }
 
     internal static void RestoreEndingHistory(ModelId hero, int totalWins, int heroWins)
     {
