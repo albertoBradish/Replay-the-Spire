@@ -28,6 +28,7 @@ public static class NativeRun
     {
         if (System.Environment.GetEnvironmentVariable("SPIRE_REPLAY_TEST") is null) return;
         var harness = new Harmony("replaythespire.test");
+        if (System.Environment.GetEnvironmentVariable("SPIRE_REPLAY_TRACE_POOL") == "1") PoolTrace.Install(harness);
         harness.Patch(AccessTools.Method(typeof(AssetCache), nameof(AssetCache.CreateSession)), postfix: new HarmonyMethod(typeof(NativeRun), nameof(AssetSession)));
         harness.Patch(AccessTools.Method(typeof(NMainMenu), nameof(NMainMenu._Ready)),
             postfix: new HarmonyMethod(typeof(NativeRun), nameof(Menu)));
