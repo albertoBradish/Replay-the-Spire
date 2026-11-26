@@ -29,6 +29,7 @@ public static class NativeRun
         if (System.Environment.GetEnvironmentVariable("SPIRE_REPLAY_TEST") is null) return;
         var harness = new Harmony("replaythespire.test");
         if (System.Environment.GetEnvironmentVariable("SPIRE_REPLAY_TRACE_POOL") == "1") PoolTrace.Install(harness);
+        if (System.Environment.GetEnvironmentVariable("SPIRE_REPLAY_VERIFY_ROOM_STATES") == "1") GalleryStateAudit.Install(harness);
         harness.Patch(AccessTools.Method(typeof(AssetCache), nameof(AssetCache.CreateSession)), postfix: new HarmonyMethod(typeof(NativeRun), nameof(AssetSession)));
         harness.Patch(AccessTools.Method(typeof(NMainMenu), nameof(NMainMenu._Ready)),
             postfix: new HarmonyMethod(typeof(NativeRun), nameof(Menu)));
@@ -115,6 +116,7 @@ public static class NativeRun
                     var reused = await (Task<string>)AccessTools.Method(type,method).Invoke(toolbar,null)!;
                     if (reused != index) throw new InvalidDataException("Unchanged recording was rendered twice.");
                     GD.Print($"REPLAY_SAMPLE_ALBUM_PASS ms={first} repeatMs={timer.ElapsedMilliseconds} index={index}");
+                    GalleryStateAudit.Report(sampleRoom.HasValue ? 1 : run.Rooms.Count(x => x.HasCombat || x.HasCheckpoint));
                 }
                 finally
                 {
